@@ -54,17 +54,55 @@ debugging escape hatches, see README).
 - `transport.ts` — HTTPS, `maxConnections = 1` (Node can only drop right
   after accept, not refuse at TCP; clients see a reset either way), 5 s
   idle timer from accept and after each response.
-- `control.ts` — the "physical button" as a plain-HTTP server on
-  **127.0.0.1 only** (`npm run button` / `factory-reset` / `mock:status`).
-  Not part of the OFL API; never advertised.
-- `mdns.ts` — unchanged naming algorithm (below), plus TXT `pair=button` /
+- `control.ts` — the device's physical side as a plain-HTTP server on
+  **127.0.0.1 only**: the pairing button (`npm run button` /
+  `factory-reset` / `mock:status`) and the hardware (`/hw/...` — plug or
+  pull a Plant or module, a sensor's own reading, module faults, clock
+  uplink; endpoint list in the file header). Not part of the OFL API;
+  never advertised. `hardware.ts` does the changes and triggers
+  capability revalidation (`noop`/`active`, §14.4) after each one.
+- `mdns.ts` — the naming algorithm (below), plus TXT `pair=button` /
   `pair=code`; bonjour-service can't update TXT in place, so a change
-  re-publishes the service. Note: bonjour-service turns the `.` in the
-  instance name into `-` (`… (ofl-peer1-local)`); the hostname itself is
-  fine.
+  re-publishes the service. After startup it keeps listening and
+  re-probes on a conflict (an A answer for its name from an address that
+  isn't this machine's — so two instances on one machine only negotiate
+  at startup). Note: bonjour-service turns the `.` in the instance name
+  into `-` (`… (ofl-peer1-local)`); the hostname itself is fine.
+- REST surface (`index.ts`): Plant and System share one sub-resource
+  router (docs/10 §10.2). Every body is validated (`validate.ts`, 400 with
+  only spec-defined fields kept), every error — including unknown paths
+  and crashes — is the §16.2 JSON shape (`http.ts`), no `ETag`/
+  `X-Powered-By`. Scenario rules live in `scenarios.ts`: the
+  Plant/System paths are views scoped by `target`, so a Scenario is only
+  reachable through its own target's path; `id`/`target`/`status` are the
+  device's (ids are `scn-N`, a client-sent `id` is ignored); PUT can't
+  change `id`/`kind`/`target` and re-checks capabilities; Culture Pack
+  import checks the pack, its Grow Profile and each bundled Scenario
+  before applying anything.
+- `library.ts` — the hardware-model library: every module is built from a
+  blueprint here, with its Hardware Calibration (served for the
+  `(blueprint_id, endpoint_type)` pairs actually present) and Default
+  Settings (seeded once per module).
+- `derive.ts` — Hardware Calibration applied on every Vitals/Actuators
+  read and Actuators write (piecewise-linear curve, clamped, command
+  rounded to the module's integral range), then Grow Profile
+  `sensor_calibration` offsets for Plant Vitals. An Actuators PUT is
+  validated against the capability's unit (binary 0/1, percent ≤ 100).
+- `engine.ts` — the Scenario engine (docs/11): generic templates per
+  matching target, active specialized Scenarios, `duration_s` reverts,
+  `max_brightness` caps Scenario-driven dimmer commands, `time` is unknown
+  (time clauses false) while the clock source is `none`. A tiny "physics"
+  (open valve raises moisture, running pump drains the tank) keeps
+  watering from re-firing forever.
+- `history.ts` — Vitals History: 24 hourly records backfilled at start,
+  then a raw sample every `OFL_HISTORY_PERIOD_S`; without `since` the
+  latest `limit` records, with `since` the first `limit` after it.
 - Persistence: key/cert + `device.json` (setup code, credential hashes) in
   `.data/<port>/` so pairings survive restarts (tsx watch restarts on every
   edit). The rest of the Garden is still in-memory and re-seeds on restart.
+- Factory reset erases user data only (names, Preferences, Grow Profiles,
+  Settings back to library defaults, specialized/script Scenarios); the
+  hardware, generic Scenarios and history stay.
 - Default port 443 — macOS has allowed unprivileged binds below 1024 since
   Mojave, so no sudo (the old "port 81 because 80 needs root" note was
   wrong for macOS; it was about the archived panel anyway).
@@ -84,11 +122,25 @@ new `garden_id`, TXT back to `pair=code`), `dns-sd` resolution.
 first free one. Two instances (`PORT=4311 OFL_CONTROL_PORT=4381 …`) negotiate
 different N — that's two processes over mDNS, not one assigning numbers.
 
-### Intentional simplifications (don't "fix" without reason)
+### Interpretations where the spec is silent (user decision 2026-10-24: the mock must follow the protocol fully)
 
-- No real Hardware Calibration math: Vitals/Actuators pass raw endpoint
-  values through (`derive.ts`) — e.g. the dimmer reports `40` "lux".
-- Vitals are static; nothing dries out or fills up over time.
+These are choices the spec doesn't make yet — candidates to settle in
+`open-farm-link`, not features to rely on:
+
+- Writing a `read` endpoint through Modules → `405 not_writable`.
+- A full Scenario store (32, §11.4) → `409 no_free_slots`.
+- Scenario `id`s are device-assigned; `settings.<module_id>.<field>` is
+  the Scenario field path into Settings.
+- A `system.`-prefixed key in `required_capabilities` is checked against
+  System (docs/20 §20.3).
+- `in`/`not_in` take a list or a `{from, to}` window; a `null` window
+  (no quiet hours) contains nothing. `time` uses the host's time zone as
+  the device's local time.
+- `mount_height_mm` isn't applied (the spec gives no formula);
+  `vacation_mode` has no effect (undefined); Grow Profile has no `status`
+  to mark `noop` (§14.4 says it should be).
+- Vitals don't drift on their own: readings change only through
+  `/hw/.../endpoints` or the watering physics.
 
 ## Home Assistant integration (`custom_components/ofl`)
 
@@ -185,6 +237,20 @@ not physical (§21.4).
 - No options-flow/diagnostics tests; card has no visual editor.
 - Never run against real hardware (TLS handshake cost on an ESP32-C3 is
   why the client keeps one connection alive within a batch).
+- The integration caches Hardware Calibration maxima once per scope, so a
+  light plugged in later (`/hw/modules`) keeps a stale slider max until
+  reload.
+- The mock's engine, `/hw/...` simulation, Vitals History and
+  `OFL_TIME_SOURCE=none` (HA's `sync_time` path) have no e2e tests yet —
+  checked by hand with curl on 2026-10-24 (every A/B/C item of that day's
+  spec audit).
+- Open spec gaps found in that audit (to settle in `open-farm-link`):
+  creating a `target: garden` Scenario (no POST path); renaming System
+  (no `PUT /garden/system`, yet §22.8 erases its name); `light_flux` vs
+  `light_lux` in docs/08 §8.2; error codes for the cases listed under
+  "Interpretations" above; whether Plant `capabilities` includes `engine`;
+  the watering template's `system.pump` value `1` is 1 % in the pump's
+  percent unit; `description` in the Plants listing.
 
 ## Conventions
 
@@ -193,4 +259,5 @@ not physical (§21.4).
   catalog mappings (`sensor.py` units/device classes, translation keys).
 - When the spec changes: update shared types, the mock, the integration,
   and re-run `npm run test:ha` — the e2e tests are the cross-check.
-- Simplifications in the mock are intentional (above).
+- The mock follows the spec fully; where the spec is silent it makes the
+  choices listed under "Interpretations" — change those together with the spec.

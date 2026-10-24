@@ -1,14 +1,46 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import express, { type NextFunction, type Request, type Response } from "express";
-import type { ApiError, Scenario, GrowProfile } from "@ofl-panel/shared";
-import { state, createInitialState, type PlantState, type SystemState } from "./state.js";
-import { deriveVitals, deriveActuators, deriveCapabilities, findEndpointForCapability } from "./derive.js";
+import express, { Router, type Request } from "express";
+import { state, deviceNow, eraseUserData, serializeModule, type OwnerState, type PlantState } from "./state.js";
+import {
+  deriveActuators,
+  deriveCapabilities,
+  deriveHardwareCalibration,
+  deriveVitals,
+  gardenStatus,
+  getActuator,
+  ownerStatus,
+  writeActuator,
+} from "./derive.js";
 import { advertiseHeadDevice, type Advertisement } from "./mdns.js";
 import { DeviceSecurity, formatSetupCode } from "./security/device.js";
 import { authGate, securityRoutes } from "./security/routes.js";
 import { createDeviceServer } from "./transport.js";
 import { startControlServer } from "./control.js";
+import { errorHandler, missingCapabilities, notFound, notFoundFallback, notWritable, requireJson } from "./http.js";
+import {
+  parseCulturePack,
+  parseEndpointValue,
+  parseGrowProfile,
+  parseHistoryQuery,
+  parseNameDescription,
+  parsePreferences,
+  parseSettings,
+  parseTime,
+} from "./validate.js";
+import {
+  addScenario,
+  deleteScenario,
+  ensureRoom,
+  findScenario,
+  missingFor,
+  prepare,
+  replaceScenario,
+  scenariosOf,
+  scopeOf,
+} from "./scenarios.js";
+import { queryHistory, startHistory } from "./history.js";
+import { startEngine } from "./engine.js";
 
 // ---- Configuration ------------------------------------------------------
 // Defaults follow the spec strictly (HTTPS on 443, auth, one connection at a
@@ -21,6 +53,8 @@ const SINGLE_CONNECTION = process.env.OFL_SINGLE_CONNECTION !== "0";
 const IDLE_TIMEOUT_MS = Number(process.env.OFL_IDLE_TIMEOUT_MS) || 5000;
 const CONTROL_PORT = Number(process.env.OFL_CONTROL_PORT) || 4380;
 const CREDENTIAL_SLOTS = Number(process.env.OFL_CREDENTIAL_SLOTS) || 4;
+const ENGINE_TICK_MS = Number(process.env.OFL_ENGINE_TICK_MS) || 1000;
+const HISTORY_PERIOD_MS = (Number(process.env.OFL_HISTORY_PERIOD_S) || 60) * 1000;
 // Per-port default, so two instances (PORT=4311 alongside the default) are
 // two independent devices with their own keys and credentials.
 const DATA_DIR =
@@ -29,362 +63,201 @@ const DATA_DIR =
 const device = new DeviceSecurity(DATA_DIR, CREDENTIAL_SLOTS, process.env.OFL_SETUP_CODE);
 
 const app = express();
-app.use(express.json());
+app.disable("x-powered-by");
+app.disable("etag");
+// Auth first, so an unauthenticated request learns nothing — not even that its body was malformed.
 app.use(authGate(device));
+app.use(express.json());
+app.use(requireJson);
 app.use(securityRoutes(device));
-
-function notFound(res: Response, what: string) {
-  res.status(404).json({ error: "not_found", detail: what } satisfies ApiError & { detail: string });
-}
-
-function missingCapabilities(res: Response, missing: string[]) {
-  res.status(422).json({ error: "missing_capabilities", missing } satisfies ApiError);
-}
-
-function checkCapabilities(required: string[], available: Set<string>): string[] {
-  return required.filter((r) => !available.has(r));
-}
-
-function plantOr404(req: Request, res: Response): PlantState | undefined {
-  const plant = state.plants.get(req.params.id);
-  if (!plant) notFound(res, `plant ${req.params.id}`);
-  return plant;
-}
-
-function availableCapabilities(modules: PlantState["modules"] | SystemState["modules"]): Set<string> {
-  const caps = new Set(deriveCapabilities(modules).modules);
-  for (const flag of state.engine_capabilities) caps.add(flag);
-  return caps;
-}
 
 // ---- Garden -----------------------------------------------------------
 
-app.get("/garden", (_req, res) => {
-  const anyProblem = Array.from(state.plants.values()).some((p) => p.status === "problem");
-  res.json({
-    garden_id: device.identity.garden_id,
-    name: state.name,
-    description: state.description,
-    protocol_version: state.protocol_version,
-    status: anyProblem ? "problem" : "ok",
-    type: state.type,
-    plant_ids: Array.from(state.plants.keys()),
-  });
+const gardenSummary = () => ({
+  garden_id: device.identity.garden_id,
+  name: state.name,
+  description: state.description,
+  protocol_version: state.protocol_version,
+  status: gardenStatus(),
+  type: state.type,
+  plant_ids: Array.from(state.plants.keys()),
 });
 
+app.get("/garden", (_req, res) => res.json(gardenSummary()));
 app.put("/garden", (req, res) => {
-  if (typeof req.body?.name === "string") state.name = req.body.name;
-  if (typeof req.body?.description === "string") state.description = req.body.description;
-  res.json({ garden_id: device.identity.garden_id, name: state.name, description: state.description });
+  const { name, description } = parseNameDescription(req.body);
+  if (name !== undefined) state.name = name;
+  if (description !== undefined) state.description = description;
+  res.json(gardenSummary());
 });
 
 app.get("/garden/preferences", (_req, res) => res.json(state.preferences));
 app.put("/garden/preferences", (req, res) => {
-  state.preferences = { ...state.preferences, ...req.body };
+  state.preferences = parsePreferences(req.body, state.preferences);
   res.json(state.preferences);
 });
 
 app.get("/garden/capabilities", (_req, res) => res.json({ engine: state.engine_capabilities }));
 
 // docs/16-rest-api.md §16.6
-app.get("/garden/time", (_req, res) => {
-  res.json({ time: new Date(Date.now() + state.timeOffsetMs).toISOString(), source: state.timeSource });
-});
+const timeBody = () => ({ time: new Date(deviceNow()).toISOString(), source: state.time.source });
+app.get("/garden/time", (_req, res) => res.json(timeBody()));
 app.put("/garden/time", (req, res) => {
-  const requested = typeof req.body?.time === "string" ? Date.parse(req.body.time) : NaN;
-  if (Number.isNaN(requested)) return res.status(400).json({ error: "bad_request" } satisfies ApiError);
-  state.timeOffsetMs = requested - Date.now();
-  state.timeSource = "manual";
-  res.json({ time: new Date(Date.now() + state.timeOffsetMs).toISOString(), source: state.timeSource });
+  state.time = { source: "manual", offsetMs: parseTime(req.body) - Date.now() };
+  res.json(timeBody());
 });
+
+// ---- Plant / System sub-resources (same shape, docs/10 §10.2) -------------
+
+function plantOf(req: Request): PlantState {
+  const plant = state.plants.get(req.params.id);
+  if (!plant) throw notFound();
+  return plant;
+}
+
+function settingsEntry(owner: OwnerState, moduleId: string) {
+  if (!owner.modules.some((m) => m.id === moduleId)) throw notFound();
+  return owner.settings.find((s) => s.module_id === moduleId) ?? { module_id: moduleId, settings: {} };
+}
+
+function endpointOf(owner: OwnerState, moduleId: string, index: string) {
+  const mod = owner.modules.find((m) => m.id === moduleId);
+  const ep = mod?.endpoints.find((e) => String(e.index) === index);
+  if (!ep) throw notFound();
+  return ep;
+}
+
+function ownerRoutes(ownerOf: (req: Request) => OwnerState): Router {
+  const r = Router({ mergeParams: true });
+
+  r.get("/vitals", (req, res) => res.json(deriveVitals(ownerOf(req))));
+  r.get("/vitals/history", (req, res) => {
+    const owner = ownerOf(req);
+    const { since, limit } = parseHistoryQuery(req.query);
+    res.json(queryHistory(owner, since, limit));
+  });
+  r.get("/hardware-calibration", (req, res) => res.json({ calibrations: deriveHardwareCalibration(ownerOf(req)) }));
+
+  r.get("/settings", (req, res) => res.json({ settings: ownerOf(req).settings }));
+  r.get("/settings/:moduleId", (req, res) => res.json(settingsEntry(ownerOf(req), req.params.moduleId)));
+  r.put("/settings/:moduleId", (req, res) => {
+    const owner = ownerOf(req);
+    const entry = settingsEntry(owner, req.params.moduleId);
+    entry.settings = parseSettings(req.body);
+    if (!owner.settings.includes(entry)) owner.settings.push(entry);
+    res.json(entry);
+  });
+
+  r.get("/modules", (req, res) => res.json({ modules: ownerOf(req).modules.map(serializeModule) }));
+  r.get("/modules/:moduleId/endpoints/:index", (req, res) => {
+    res.json(endpointOf(ownerOf(req), req.params.moduleId, req.params.index));
+  });
+  // docs/09 §9.3: raw passthrough, no range check — but a read-only endpoint can't be written.
+  r.put("/modules/:moduleId/endpoints/:index", (req, res) => {
+    const ep = endpointOf(ownerOf(req), req.params.moduleId, req.params.index);
+    if (ep.mode === "read") throw notWritable();
+    ep.value = parseEndpointValue(req.body);
+    res.json(ep);
+  });
+
+  r.get("/capabilities", (req, res) => res.json(deriveCapabilities(ownerOf(req))));
+
+  r.get("/actuators", (req, res) => res.json(deriveActuators(ownerOf(req))));
+  r.get("/actuators/:capability", (req, res) => {
+    const entry = getActuator(ownerOf(req), req.params.capability);
+    if (!entry) throw notFound();
+    res.json(entry);
+  });
+  r.put("/actuators/:capability", (req, res) => {
+    const entry = writeActuator(ownerOf(req), req.params.capability, (req.body as { value?: unknown }).value);
+    if (!entry) throw notFound();
+    res.json(entry);
+  });
+
+  r.get("/scenarios", (req, res) => res.json(scenariosOf(ownerOf(req))));
+  r.post("/scenarios", (req, res) => res.status(201).json(addScenario(req.body, scopeOf(ownerOf(req)))));
+  r.get("/scenarios/:scenarioId", (req, res) => res.json(findScenario(req.params.scenarioId, ownerOf(req))));
+  r.put("/scenarios/:scenarioId", (req, res) => {
+    res.json(replaceScenario(findScenario(req.params.scenarioId, ownerOf(req)), req.body));
+  });
+  r.delete("/scenarios/:scenarioId", (req, res) => {
+    deleteScenario(findScenario(req.params.scenarioId, ownerOf(req)));
+    res.status(204).end();
+  });
+
+  return r;
+}
 
 // ---- Plants -------------------------------------------------------------
 
-app.get("/garden/plants", (_req, res) => {
-  res.json(
-    Array.from(state.plants.values()).map((p) => ({
-      plant_id: p.plant_id,
-      name: p.name,
-      description: p.description,
-      status: p.status,
-    })),
-  );
+const plantSummary = (p: PlantState) => ({
+  plant_id: p.plant_id,
+  name: p.name,
+  description: p.description,
+  status: ownerStatus(p),
 });
 
-app.get("/garden/plants/:id", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json({ plant_id: plant.plant_id, name: plant.name, description: plant.description, status: plant.status });
-});
-
+app.get("/garden/plants", (_req, res) => res.json(Array.from(state.plants.values(), plantSummary)));
+app.get("/garden/plants/:id", (req, res) => res.json(plantSummary(plantOf(req))));
 app.put("/garden/plants/:id", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  if (typeof req.body?.name === "string") plant.name = req.body.name;
-  if (typeof req.body?.description === "string") plant.description = req.body.description;
-  res.json({ plant_id: plant.plant_id, name: plant.name, description: plant.description, status: plant.status });
+  const plant = plantOf(req);
+  const { name, description } = parseNameDescription(req.body);
+  if (name !== undefined) plant.name = name;
+  if (description !== undefined) plant.description = description;
+  res.json(plantSummary(plant));
 });
 
-app.get("/garden/plants/:id/vitals", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json(deriveVitals(plant.modules));
-});
-
-app.get("/garden/plants/:id/vitals/history", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const since = typeof req.query.since === "string" ? req.query.since : undefined;
-  const limit = Math.min(Number(req.query.limit) || 100, 500);
-  let records = plant.vitals_history;
-  if (since) records = records.filter((r) => r.timestamp >= since);
-  res.json(records.slice(0, limit));
-});
-
-app.get("/garden/plants/:id/hardware-calibration", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json({ calibrations: plant.hardware_calibration });
-});
-
-app.get("/garden/plants/:id/settings", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json({ settings: plant.settings });
-});
-app.get("/garden/plants/:id/settings/:moduleId", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const entry = plant.settings.find((s) => s.module_id === req.params.moduleId);
-  if (!entry) return notFound(res, `settings for module ${req.params.moduleId}`);
-  res.json(entry);
-});
-app.put("/garden/plants/:id/settings/:moduleId", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  let entry = plant.settings.find((s) => s.module_id === req.params.moduleId);
-  if (!entry) {
-    entry = { module_id: req.params.moduleId, settings: {} };
-    plant.settings.push(entry);
-  }
-  entry.settings = { ...entry.settings, ...req.body?.settings };
-  res.json(entry);
-});
-
-app.get("/garden/plants/:id/grow-profile", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json(plant.grow_profile);
-});
+app.get("/garden/plants/:id/grow-profile", (req, res) => res.json(plantOf(req).grow_profile));
 app.put("/garden/plants/:id/grow-profile", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const proposed = req.body as GrowProfile;
-  const missing = checkCapabilities(proposed.required_capabilities ?? [], availableCapabilities(plant.modules));
-  if (missing.length > 0) return missingCapabilities(res, missing);
-  plant.grow_profile = proposed;
+  const plant = plantOf(req);
+  const profile = parseGrowProfile(req.body);
+  const missing = missingFor(profile.required_capabilities, scopeOf(plant));
+  if (missing.length > 0) throw missingCapabilities(missing);
+  plant.grow_profile = profile;
   res.json(plant.grow_profile);
 });
 
-app.get("/garden/plants/:id/modules", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json({ modules: plant.modules });
-});
-
-app.get("/garden/plants/:id/modules/:moduleId/endpoints/:index", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const mod = plant.modules.find((m) => m.id === req.params.moduleId);
-  const ep = mod?.endpoints[Number(req.params.index)];
-  if (!mod || !ep) return notFound(res, "module/endpoint");
-  res.json(ep);
-});
-app.put("/garden/plants/:id/modules/:moduleId/endpoints/:index", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const mod = plant.modules.find((m) => m.id === req.params.moduleId);
-  const ep = mod?.endpoints[Number(req.params.index)];
-  if (!mod || !ep) return notFound(res, "module/endpoint");
-  ep.value = req.body?.value;
-  res.json(ep);
-});
-
-app.get("/garden/plants/:id/capabilities", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json(deriveCapabilities(plant.modules));
-});
-
-app.get("/garden/plants/:id/actuators", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json(deriveActuators(plant.modules));
-});
-app.get("/garden/plants/:id/actuators/:capability", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const entry = deriveActuators(plant.modules).actuators.find((a) => a.capability === req.params.capability);
-  if (!entry) return notFound(res, `actuator ${req.params.capability}`);
-  res.json(entry);
-});
-app.put("/garden/plants/:id/actuators/:capability", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const found = findEndpointForCapability(plant.modules, req.params.capability);
-  if (!found) return notFound(res, `actuator ${req.params.capability}`);
-  // Real Hardware Calibration translation not applied — see derive.ts.
-  found.module.endpoints[found.endpointIndex].value = req.body?.value;
-  const entry = deriveActuators(plant.modules).actuators.find((a) => a.capability === req.params.capability);
-  res.json(entry);
-});
-
+// docs/15 §15.3: validated as a whole — the pack, its Grow Profile and every
+// bundled Scenario (§14.5) — then applied in one step, or not at all.
 app.post("/garden/plants/:id/culture-packs", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const pack = req.body as { grow_profile: GrowProfile; disables: string[]; scenarios: Scenario[]; required_capabilities: string[] };
-  const missing = checkCapabilities(pack.required_capabilities ?? [], availableCapabilities(plant.modules));
-  if (missing.length > 0) return missingCapabilities(res, missing);
-  plant.grow_profile = pack.grow_profile;
-  for (const flag of pack.disables ?? []) {
-    (plant.grow_profile as unknown as Record<string, unknown>)[flag] = false;
-  }
-  for (const scenario of pack.scenarios ?? []) {
-    state.scenarios.push({ ...scenario, target: { type: "plant", id: plant.plant_id } } as Scenario);
-  }
-  res.status(201).json(plant.grow_profile);
+  const plant = plantOf(req);
+  const pack = parseCulturePack(req.body);
+  const scope = scopeOf(plant);
+  const missing = new Set([
+    ...missingFor(pack.required_capabilities, scope),
+    ...missingFor(pack.grow_profile.required_capabilities, scope),
+    ...pack.scenarios.flatMap((s) => missingFor(s.required_capabilities, scope)),
+  ]);
+  if (missing.size > 0) throw missingCapabilities(Array.from(missing));
+  ensureRoom(pack.scenarios.length);
+  const scenarios = pack.scenarios.map((s) => prepare(s, scope));
+
+  const profile: Record<string, unknown> = { ...pack.grow_profile };
+  for (const flag of pack.disables) profile[flag] = false;
+  plant.grow_profile = profile as unknown as PlantState["grow_profile"];
+  state.scenarios.push(...scenarios);
+  res.status(201).json({ grow_profile: plant.grow_profile, scenarios });
 });
 
-// ---- Scenarios (shared helpers for Plant/System/Garden-wide views) ------
-
-function scenariosForTarget(type: "plant" | "system", id?: string): Scenario[] {
-  return state.scenarios.filter((s) => {
-    if (s.kind === "generic") return s.applies_to === type;
-    return s.target.type === type && (type === "system" || s.target.id === id);
-  });
-}
-
-app.get("/garden/plants/:id/scenarios", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  res.json(scenariosForTarget("plant", plant.plant_id));
-});
-app.post("/garden/plants/:id/scenarios", (req, res) => {
-  const plant = plantOr404(req, res);
-  if (!plant) return;
-  const scenario = req.body as Scenario;
-  if (scenario.kind === "generic") return res.status(400).json({ error: "bad_request" } satisfies ApiError);
-  const missing = checkCapabilities(scenario.required_capabilities ?? [], availableCapabilities(plant.modules));
-  if (missing.length > 0) return missingCapabilities(res, missing);
-  scenario.target = { type: "plant", id: plant.plant_id };
-  state.scenarios.push(scenario);
-  res.status(201).json(scenario);
-});
-
-function scenarioRoutes(idParam: string) {
-  return {
-    get: (req: Request, res: Response) => {
-      const scenario = state.scenarios.find((s) => s.id === req.params[idParam]);
-      if (!scenario) return notFound(res, "scenario");
-      res.json(scenario);
-    },
-    put: (req: Request, res: Response) => {
-      const scenario = state.scenarios.find((s) => s.id === req.params[idParam]);
-      if (!scenario) return notFound(res, "scenario");
-      if (scenario.kind === "generic") return res.status(405).json({ error: "not_writable" } satisfies ApiError);
-      Object.assign(scenario, req.body);
-      res.json(scenario);
-    },
-    del: (req: Request, res: Response) => {
-      const idx = state.scenarios.findIndex((s) => s.id === req.params[idParam]);
-      if (idx < 0) return notFound(res, "scenario");
-      if (state.scenarios[idx].kind === "generic") return res.status(405).json({ error: "not_writable" } satisfies ApiError);
-      state.scenarios.splice(idx, 1);
-      res.status(204).end();
-    },
-  };
-}
-const scenarioById = scenarioRoutes("scenarioId");
-app.get("/garden/plants/:id/scenarios/:scenarioId", scenarioById.get);
-app.put("/garden/plants/:id/scenarios/:scenarioId", scenarioById.put);
-app.delete("/garden/plants/:id/scenarios/:scenarioId", scenarioById.del);
-app.get("/garden/system/scenarios/:scenarioId", scenarioById.get);
-app.put("/garden/system/scenarios/:scenarioId", scenarioById.put);
-app.delete("/garden/system/scenarios/:scenarioId", scenarioById.del);
-const scenarioByGardenId = scenarioRoutes("id");
-app.get("/garden/scenarios/:id", scenarioByGardenId.get);
-app.put("/garden/scenarios/:id", scenarioByGardenId.put);
-app.delete("/garden/scenarios/:id", scenarioByGardenId.del);
-
-app.get("/garden/scenarios", (_req, res) => res.json(state.scenarios));
+app.use("/garden/plants/:id", ownerRoutes(plantOf));
 
 // ---- System ---------------------------------------------------------------
 
 app.get("/garden/system", (_req, res) => res.json({ name: state.system.name }));
+app.use("/garden/system", ownerRoutes(() => state.system));
 
-app.get("/garden/system/vitals", (_req, res) => res.json(deriveVitals(state.system.modules)));
-app.get("/garden/system/vitals/history", (req, res) => {
-  const since = typeof req.query.since === "string" ? req.query.since : undefined;
-  const limit = Math.min(Number(req.query.limit) || 100, 500);
-  let records = state.system.vitals_history;
-  if (since) records = records.filter((r) => r.timestamp >= since);
-  res.json(records.slice(0, limit));
-});
-app.get("/garden/system/hardware-calibration", (_req, res) => res.json({ calibrations: state.system.hardware_calibration }));
-app.get("/garden/system/settings", (_req, res) => res.json({ settings: state.system.settings }));
-app.get("/garden/system/settings/:moduleId", (req, res) => {
-  const entry = state.system.settings.find((s) => s.module_id === req.params.moduleId);
-  if (!entry) return notFound(res, `settings for module ${req.params.moduleId}`);
-  res.json(entry);
-});
-app.put("/garden/system/settings/:moduleId", (req, res) => {
-  let entry = state.system.settings.find((s) => s.module_id === req.params.moduleId);
-  if (!entry) {
-    entry = { module_id: req.params.moduleId, settings: {} };
-    state.system.settings.push(entry);
-  }
-  entry.settings = { ...entry.settings, ...req.body?.settings };
-  res.json(entry);
-});
-app.get("/garden/system/modules", (_req, res) => res.json({ modules: state.system.modules }));
-app.get("/garden/system/modules/:moduleId/endpoints/:index", (req, res) => {
-  const mod = state.system.modules.find((m) => m.id === req.params.moduleId);
-  const ep = mod?.endpoints[Number(req.params.index)];
-  if (!mod || !ep) return notFound(res, "module/endpoint");
-  res.json(ep);
-});
-app.put("/garden/system/modules/:moduleId/endpoints/:index", (req, res) => {
-  const mod = state.system.modules.find((m) => m.id === req.params.moduleId);
-  const ep = mod?.endpoints[Number(req.params.index)];
-  if (!mod || !ep) return notFound(res, "module/endpoint");
-  ep.value = req.body?.value;
-  res.json(ep);
-});
-app.get("/garden/system/capabilities", (_req, res) => res.json(deriveCapabilities(state.system.modules)));
-app.get("/garden/system/actuators", (_req, res) => res.json(deriveActuators(state.system.modules)));
-app.put("/garden/system/actuators/:capability", (req, res) => {
-  const found = findEndpointForCapability(state.system.modules, req.params.capability);
-  if (!found) return notFound(res, `actuator ${req.params.capability}`);
-  found.module.endpoints[found.endpointIndex].value = req.body?.value;
-  const entry = deriveActuators(state.system.modules).actuators.find((a) => a.capability === req.params.capability);
-  res.json(entry);
-});
-app.get("/garden/system/scenarios", (_req, res) => res.json(scenariosForTarget("system")));
-app.post("/garden/system/scenarios", (req, res) => {
-  const scenario = req.body as Scenario;
-  if (scenario.kind === "generic") return res.status(400).json({ error: "bad_request" } satisfies ApiError);
-  const missing = checkCapabilities(scenario.required_capabilities ?? [], availableCapabilities(state.system.modules));
-  if (missing.length > 0) return missingCapabilities(res, missing);
-  scenario.target = { type: "system" };
-  state.scenarios.push(scenario);
-  res.status(201).json(scenario);
+// ---- Scenarios (Garden-wide view, docs/16 §16.5) ---------------------------
+
+app.get("/garden/scenarios", (_req, res) => res.json(state.scenarios));
+app.get("/garden/scenarios/:id", (req, res) => res.json(findScenario(req.params.id)));
+app.put("/garden/scenarios/:id", (req, res) => res.json(replaceScenario(findScenario(req.params.id), req.body)));
+app.delete("/garden/scenarios/:id", (req, res) => {
+  deleteScenario(findScenario(req.params.id));
+  res.status(204).end();
 });
 
-// Malformed JSON from express.json() → the spec's error shape, not Express's HTML page.
-app.use((err: { type?: string }, _req: Request, res: Response, next: NextFunction) => {
-  if (err?.type === "entity.parse.failed") return res.status(400).json({ error: "bad_request" } satisfies ApiError);
-  next(err);
-});
+app.use(notFoundFallback);
+app.use(errorHandler);
 
 // ---- Startup ----------------------------------------------------------------
 
@@ -399,10 +272,10 @@ const txt = () => ({ garden_id: device.identity.garden_id, pair: device.pairAdve
 device.on("changed", () => advertisement?.update(txt()));
 
 // §22.8: erases credentials + every user-supplied data item, new key pair.
-// Library-sourced data (Hardware Calibration, generic Scenarios) comes back
-// from the seed, which is where the mock keeps it anyway.
+// Hardware, library-sourced data (Hardware Calibration, generic Scenarios)
+// and Vitals History stay.
 function factoryReset() {
-  Object.assign(state, createInitialState());
+  eraseUserData(state);
   device.factoryReset();
   transport.setIdentity(device.identity);
 }
@@ -414,6 +287,7 @@ transport.server.listen(PORT, () => {
   console.log(`  fingerprint  ${device.identity.fingerprint}`);
   console.log(`  setup code   ${device.setupCode ? formatSetupCode(device.setupCode) : "(none — button pairing only)"}`);
   console.log(`  claimed      ${device.claimed ? `yes (${device.listClients().length} credential(s))` : "no"}`);
+  console.log(`  clock        ${state.time.source}`);
   console.log(`  data dir     ${DATA_DIR}`);
   if (!TLS) console.warn("  WARNING: OFL_TLS=0 — plain HTTP, violates docs/22-security.md §22.2 (debug only)");
   if (!SINGLE_CONNECTION) console.warn("  WARNING: OFL_SINGLE_CONNECTION=0 — concurrent connections allowed (debug only)");
@@ -423,3 +297,5 @@ transport.server.listen(PORT, () => {
 });
 
 startControlServer(device, CONTROL_PORT, factoryReset);
+startEngine(ENGINE_TICK_MS);
+startHistory(HISTORY_PERIOD_MS);

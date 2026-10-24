@@ -2,14 +2,11 @@
 // of every endpoint (§22.5), pairing (§22.4) and credential management (§22.6).
 
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { ApiError, PairChallengeResponse, PairResponse } from "@ofl-panel/shared";
+import type { PairChallengeResponse, PairResponse } from "@ofl-panel/shared";
 import type { DeviceSecurity, CredentialError } from "./device.js";
+import { sendError as fail } from "../http.js";
 
 const UNAUTHENTICATED = new Set(["/garden/pair/challenge", "/garden/pair"]);
-
-function fail(res: Response, status: number, error: string) {
-  res.status(status).json({ error } satisfies ApiError);
-}
 
 function credentialError(res: Response, err: CredentialError) {
   fail(res, err === "bad_request" ? 400 : 409, err);

@@ -115,10 +115,13 @@ export type ScenarioOp = "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "in" | "not
 export interface ScenarioFieldRef {
   field: string;
 }
+// A literal `in`/`not_in` operand: a list, or a time-of-day window shaped
+// like Preferences quiet_hours.
+export type ScenarioLiteral = number | string | boolean;
 export interface ScenarioClause {
   field: string;
   op: ScenarioOp;
-  value: number | string | boolean | ScenarioFieldRef;
+  value: ScenarioLiteral | ScenarioLiteral[] | ScenarioFieldRef | { from: string; to: string };
 }
 export interface ScenarioCondition {
   combinator: "all" | "any";

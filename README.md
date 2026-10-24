@@ -11,7 +11,7 @@ develop it against without hardware.
 |---|---|
 | `custom_components/ofl` | The Home Assistant integration (Python). Discovers Head Devices over mDNS, pairs with them (button / setup code / existing login, [docs/22-security.md](../open-farm-link/docs/22-security.md)), pins each device's key, polls it, and exposes Vitals/Actuators/Grow Profile flags/Preferences as entities. Ships the card below and registers it on every dashboard by itself. |
 | `packages/ha-card` | `ofl-garden-card`, a Lovelace card (Lit + TypeScript): the rack at a glance — head unit + one tray per Plant — and a friendly per-plant view with moisture status, **Water now** and the light. Built into `custom_components/ofl/frontend/`. |
-| `packages/mock-server` | A mock Head Device (Express) implementing the REST API **and** the security/transport rules strictly: HTTPS with a self-signed pinned key, auth on every request, pairing, credential management, brute-force limit, one connection at a time, 5 s idle timeout, mDNS with `pair=` in TXT. |
+| `packages/mock-server` | A mock Head Device (Express) following the protocol strictly: the full REST API with validation and Hardware Calibration, a Scenario engine, Vitals History, and the security/transport rules (HTTPS with a self-signed pinned key, auth on every request, pairing, credential management, brute-force limit, one connection at a time, 5 s idle timeout, mDNS with `pair=` in TXT). Simulated hardware changes go through a localhost-only control server. |
 | `packages/shared` | TypeScript types mirroring the spec entities, used by the mock. Hand-maintained against the spec. |
 | `tests/` | End-to-end tests: Home Assistant's own test harness driving the integration against a real mock server process. |
 
@@ -29,6 +29,20 @@ npm run dev:mock        # https://localhost:443 — prints garden_id, fingerprin
 npm run button          # "short press": open the 2-minute pairing window
 npm run factory-reset   # "long press": wipe credentials + user data, new key → new garden_id
 npm run mock:status     # what a serial console would show (fingerprint, setup code, clients)
+```
+
+The control server (`127.0.0.1:4380`) also stands in for the hardware —
+what a real device would detect on its own bus:
+
+```sh
+H=http://127.0.0.1:4380
+curl -X POST $H/hw/plants                                   # a new pot/anchor appears → new Plant
+curl -X DELETE $H/hw/plants/plant-3                         # …and is pulled again
+curl -X POST $H/hw/modules -d '{"owner":"plant-1","blueprint_id":"acme-scale-v1"}'  # see library.ts
+curl -X DELETE $H/hw/modules/plant-1-valve                  # Scenarios needing it turn noop
+curl -X PUT $H/hw/modules/plant-1-container/endpoints/0 -d '{"value":40}'  # soil dries → watering fires
+curl -X PUT $H/hw/modules/sys-tank/fault -d '{"faulted":true}'             # status: problem
+curl -X PUT $H/hw/time -d '{"source":"none"}'               # reboot with no uplink
 ```
 
 Its key, setup code and credentials persist in `packages/mock-server/.data/<port>/`
@@ -49,6 +63,9 @@ curl -k --pinnedpubkey 'sha256//…' -u user:'password' https://localhost/garden
 | `OFL_TLS=0` | — | Debug only: plain HTTP (violates §22.2). |
 | `OFL_SINGLE_CONNECTION=0` | — | Debug only: allow concurrent connections. |
 | `OFL_IDLE_TIMEOUT_MS` | `5000` | |
+| `OFL_TIME_SOURCE` | `ntp` | `none`: boot with no clock, like a device with no uplink (§16.6). |
+| `OFL_ENGINE_TICK_MS` | `1000` | Scenario engine period. |
+| `OFL_HISTORY_PERIOD_S` | `60` | Raw Vitals History sample period. |
 
 ## Home Assistant integration
 
