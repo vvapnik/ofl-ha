@@ -1,0 +1,18 @@
+{
+  "name": "open-farm-link-panel",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:mock": "npm run dev -w @ofl-panel/mock-server",
+    "button": "curl -s -X POST http://127.0.0.1:${OFL_CONTROL_PORT:-4380}/button/short",
+    "factory-reset": "curl -s -X POST http://127.0.0.1:${OFL_CONTROL_PORT:-4380}/button/long",
+    "mock:status": "curl -s http://127.0.0.1:${OFL_CONTROL_PORT:-4380}/status",
+    "build:card": "npm run build -w @ofl-panel/ha-card",
+    "test:ha": ".venv/bin/python -m pytest"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

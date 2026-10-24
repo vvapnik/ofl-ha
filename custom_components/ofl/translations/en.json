@@ -1,0 +1,172 @@
+{
+  "config": {
+    "flow_title": "Garden {name}",
+    "step": {
+      "user": {
+        "title": "Add an Open Farm Link Head Device",
+        "description": "Head Devices on this network are normally discovered automatically. Enter an address only if yours wasn't.",
+        "data": {
+          "host": "Host or IP address",
+          "port": "Port"
+        }
+      },
+      "pair": {
+        "title": "Pair with Garden {garden_id}",
+        "description": "Found a Head Device at {host}. Choose how to prove you own it:",
+        "menu_options": {
+          "pair_button": "Pairing button on the device",
+          "pair_setup_code": "Setup code (from the device or its packaging)",
+          "pair_credentials": "Existing username and password"
+        }
+      },
+      "pair_button": {
+        "title": "Press the pairing button",
+        "description": "Briefly press the pairing button on the Head Device (on a dev board: BOOT). It stays open for 2 minutes. Then submit.\n\nAnyone on your network can pair while that window is open — you'll see the full list of credentials on the next screen."
+      },
+      "pair_setup_code": {
+        "title": "Enter the setup code",
+        "description": "16 characters, e.g. 7K2M-Q9XD-4HTR-8WCN. Works only for a device nobody has paired with yet. Home Assistant first checks that the device really knows this code before sending it.",
+        "data": {
+          "setup_code": "Setup code"
+        }
+      },
+      "pair_credentials": {
+        "title": "Use an existing login",
+        "description": "A username/password created earlier, e.g. from the official app or with curl.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "paired": {
+        "title": "Paired with Garden {garden_id}",
+        "description": "These credentials currently have full access to this Garden:\n\n{clients}\n\nIf you don't recognize one, revoke it from a client you trust."
+      }
+    },
+    "error": {
+      "cannot_connect": "Can't reach the Head Device. It accepts only one connection at a time — close other apps talking to it and retry.",
+      "identity_mismatch": "The device's identity doesn't check out (different key than expected, or it doesn't know this setup code). Not pairing.",
+      "pairing_closed": "The device isn't accepting pairing right now. Press its pairing button (or, for an unpaired device, use its setup code).",
+      "invalid_setup_code": "Wrong setup code.",
+      "setup_code_mismatch": "This setup code doesn't match this device — check for a typo. (The code was not sent: Home Assistant checks it against the device first.)",
+      "too_many_attempts": "Too many failed attempts — the device only accepts one try every 10 seconds now.",
+      "no_free_slots": "The device's credential storage is full. Revoke an unused credential first.",
+      "username_taken": "That username is already used on this device.",
+      "invalid_auth": "Wrong username or password.",
+      "unknown": "Unexpected error, see the log."
+    },
+    "abort": {
+      "already_configured": "This Garden is already set up.",
+      "not_ofl_device": "Not an Open Farm Link Head Device.",
+      "device_reset": "This Head Device has a new identity — it was factory reset, which makes it a new Garden. Remove this entry and add the device again.",
+      "reauth_successful": "Re-paired successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "water_seconds": "\"Water now\" duration (seconds)",
+          "sync_time": "Set the device clock from Home Assistant when it has no time source"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "status": {
+        "name": "Problem"
+      }
+    },
+    "button": {
+      "water_now": {
+        "name": "Water now"
+      }
+    },
+    "number": {
+      "dimmer": {
+        "name": "Light"
+      },
+      "pump": {
+        "name": "Pump"
+      },
+      "vibro": {
+        "name": "Vibration"
+      },
+      "actuator": {
+        "name": "{capability}"
+      }
+    },
+    "sensor": {
+      "moisture": {
+        "name": "Moisture"
+      },
+      "temp": {
+        "name": "Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "light": {
+        "name": "Illuminance"
+      },
+      "weight": {
+        "name": "Weight"
+      },
+      "distance": {
+        "name": "Distance"
+      },
+      "water_level": {
+        "name": "Water level"
+      },
+      "vital": {
+        "name": "{type}"
+      },
+      "time_source": {
+        "name": "Clock source",
+        "state": {
+          "ntp": "NTP",
+          "manual": "Set manually",
+          "none": "Not set"
+        }
+      }
+    },
+    "switch": {
+      "relay": {
+        "name": "Relay"
+      },
+      "valve": {
+        "name": "Valve"
+      },
+      "light_switch": {
+        "name": "Light switch"
+      },
+      "actuator": {
+        "name": "{capability}"
+      },
+      "watering_enabled": {
+        "name": "Automatic watering"
+      },
+      "lighting_enabled": {
+        "name": "Automatic lighting"
+      },
+      "climate_enabled": {
+        "name": "Automatic climate"
+      },
+      "grow_flag": {
+        "name": "Automatic {category}"
+      },
+      "vacation_mode": {
+        "name": "Vacation mode"
+      }
+    },
+    "time": {
+      "quiet_hours_from": {
+        "name": "Quiet hours start"
+      },
+      "quiet_hours_to": {
+        "name": "Quiet hours end"
+      }
+    }
+  }
+}
