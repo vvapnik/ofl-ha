@@ -239,6 +239,18 @@ not physical (§21.4).
 - Card rendered in headless Chrome against a stubbed `hass` (light/dark,
   en/ru, all three views). Not yet looked at inside a real HA dashboard.
 
+### Verified on the real rig (2026-11-10, bench mode)
+
+`open-farm-link-esp32` at `ofl-peer1.local` (garden "Real Reack", one Plant:
+plant container with moisture + valve, light module with dimmer), HA OS
+2026.11.0, installed through the Marketplace (HACS) from GitHub `main`:
+zeroconf discovery → `insecure_confirm` → entry loaded; entities: moisture
+(raw count, no unit), valve switch, light number 0–100 %, problem sensors,
+clock source, Water now. Checked against the device's own API after each
+step: valve on/off, dimmer 50 → 100, Water now opened the valve and HA
+closed it 2 s later. No `ofl` errors or deprecation warnings in the log.
+The card was not looked at on a real dashboard yet.
+
 ## Known gaps / open points
 
 - **Water now times the close in HA.** The Actuators API has no duration
@@ -255,8 +267,13 @@ not physical (§21.4).
   History, Settings, raw Modules, `max_brightness`, credential management
   beyond the post-pairing list (no UI to revoke other clients).
 - No options-flow/diagnostics tests; card has no visual editor.
-- Never run against real hardware (TLS handshake cost on an ESP32-C3 is
-  why the client keeps one connection alive within a batch).
+- Secure mode never run against real hardware: the only firmware
+  (`open-farm-link-esp32`) has no docs/22 yet, so the real rig runs in bench
+  mode (TLS handshake cost on an ESP32-C3 is why the client keeps one
+  connection alive within a batch).
+- Bench mode shows raw values (e.g. moisture `~9000` raw16) until the
+  firmware implements Hardware Calibration; the card's moisture status
+  needs a percentage, so it can't judge a raw reading.
 - The integration caches Hardware Calibration maxima once per scope, so a
   light plugged in later (`/hw/modules`) keeps a stale slider max until
   reload.
