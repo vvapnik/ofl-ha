@@ -2,7 +2,11 @@
 
 Device layout: the Head Device / Garden is one HA device (System's shared
 resources hang off it too — there is exactly one System per Garden, §10);
-every Plant is its own device ``via_device`` the Garden.
+every Plant is its own device linked to the Garden's (``via_device_id``).
+The link is set through the device registry once the entity is added, not
+with ``DeviceInfo(via_device=...)``: HA 2026.11 deprecates that parameter
+and, depending on the call stack, raises instead of warning (it once kept
+the Water now button from being added at all).
 
 Plants appear and disappear with hardware (docs/16-rest-api.md §16.1), and a
 Plant's Vitals/Actuators only list what's currently available (§4.2, §17.2),
@@ -17,6 +21,7 @@ from typing import Any
 
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -32,6 +37,17 @@ SYSTEM = "system"
 
 def plant_device_identifier(garden_id: str, plant_id: str) -> str:
     return f"{garden_id}:plant:{plant_id}"
+
+
+def garden_device_info(garden_id: str, garden: dict[str, Any]) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, garden_id)},
+        name=garden.get("name") or f"Garden {garden_id}",
+        manufacturer="Open Farm Link",
+        model=f"Head Device ({garden.get('type', 'unknown')})",
+        sw_version=f"OFL {garden.get('protocol_version', '?')}",
+        serial_number=garden_id,
+    )
 
 
 def unique_id_for(garden_id: str, scope: str, kind: str, key: str) -> str:
@@ -50,16 +66,9 @@ class OflEntity(CoordinatorEntity[OflCoordinator]):
         self.key = key
         garden_id = coordinator.config_entry.unique_id or ""
         self._attr_unique_id = unique_id_for(garden_id, scope, kind, key)
+        self._garden_id = garden_id
         if scope in (GARDEN, SYSTEM):
-            garden = coordinator.data.garden
-            self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, garden_id)},
-                name=garden.get("name") or f"Garden {garden_id}",
-                manufacturer="Open Farm Link",
-                model=f"Head Device ({garden.get('type', 'unknown')})",
-                sw_version=f"OFL {garden.get('protocol_version', '?')}",
-                serial_number=garden_id,
-            )
+            self._attr_device_info = garden_device_info(garden_id, coordinator.data.garden)
         else:
             plant = coordinator.data.plants[scope]
             self._attr_device_info = DeviceInfo(
@@ -67,8 +76,18 @@ class OflEntity(CoordinatorEntity[OflCoordinator]):
                 name=plant.name,
                 manufacturer="Open Farm Link",
                 model=f"Plant ({plant.grow_profile.get('species') or 'unknown species'})",
-                via_device=(DOMAIN, garden_id),
             )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self.scope in (GARDEN, SYSTEM):
+            return
+        # Plant device → Garden device (the Garden device is created in async_setup_entry).
+        reg = dr.async_get(self.hass)
+        garden = reg.async_get_device(identifiers={(DOMAIN, self._garden_id)})
+        plant = reg.async_get_device(identifiers={(DOMAIN, plant_device_identifier(self._garden_id, self.scope))})
+        if garden and plant and plant.via_device_id != garden.id:
+            reg.async_update_device(plant.id, via_device_id=garden.id)
 
     @property
     def scope_path(self) -> str:

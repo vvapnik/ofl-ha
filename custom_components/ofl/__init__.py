@@ -30,6 +30,7 @@ from .const import (
     FRONTEND_URL_BASE,
 )
 from .coordinator import OflConfigEntry, OflCoordinator
+from .entity import garden_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +82,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: OflConfigEntry) -> bool:
         await client.close()
         raise
     entry.runtime_data = coordinator
+    # The Garden device first, so Plant devices can be linked to it (entity.py).
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, **garden_device_info(entry.unique_id or "", coordinator.data.garden)
+    )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_options))
     return True

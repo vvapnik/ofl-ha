@@ -21,7 +21,7 @@ from homeassistant.config_entries import SOURCE_USER, SOURCE_ZEROCONF, ConfigEnt
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from custom_components.ofl.const import CONF_GARDEN_ID, CONF_INSECURE, DOMAIN
@@ -230,7 +230,13 @@ async def test_zeroconf_bench_mode_entities_and_writes(hass: HomeAssistant, fake
 
     # Water now works the same way (valve open, then closed by HA).
     button = eid("button", f"{PLANT}_button_water_now")
-    assert button is not None
+    assert button is not None and hass.states.get(button) is not None
+
+    # Plant device hangs off the Garden device (set via the registry, not DeviceInfo.via_device).
+    devices = dr.async_get(hass)
+    garden_dev = devices.async_get_device(identifiers={(DOMAIN, GARDEN_ID)})
+    plant_dev = devices.async_get_device(identifiers={(DOMAIN, f"{GARDEN_ID}:plant:{PLANT}")})
+    assert garden_dev and plant_dev and plant_dev.via_device_id == garden_dev.id
 
     await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
