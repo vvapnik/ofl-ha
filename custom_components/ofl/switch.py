@@ -18,7 +18,9 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: OflConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     def build(c: OflCoordinator):
-        factories = {"vacation_mode": lambda: VacationModeSwitch(c)}
+        factories = {}
+        if c.data.preferences is not None:
+            factories["vacation_mode"] = lambda: VacationModeSwitch(c)
         for scope, data in scopes(c.data):
             for cap, act in data.actuators.items():
                 if act.get("unit") == BINARY_ACTUATOR_UNIT:
@@ -52,7 +54,8 @@ class ActuatorSwitch(OflEntity, SwitchEntity):
     async def _set(self, value: int) -> None:
         resp = await self._write(lambda: self.coordinator.client.put_actuator(self.scope_path, self.key, value))
         if isinstance(resp, dict) and "value" in resp:
-            self.scope_data.actuators[self.key] = resp
+            # Merge: a device may answer with just {capability, value}.
+            self.scope_data.actuators[self.key] = {**self.scope_data.actuators[self.key], **resp}
         self.coordinator.async_update_listeners()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -100,8 +103,12 @@ class VacationModeSwitch(OflEntity, SwitchEntity):
         super().__init__(coordinator, GARDEN, "pref", "vacation_mode")
 
     @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.preferences is not None
+
+    @property
     def is_on(self) -> bool | None:
-        return self.coordinator.data.preferences.get("vacation_mode")
+        return (self.coordinator.data.preferences or {}).get("vacation_mode")
 
     async def _set(self, value: bool) -> None:
         prefs = {**self.coordinator.data.preferences, "vacation_mode": value}

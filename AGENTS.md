@@ -2,13 +2,15 @@
 
 Guidance for AI agents working in this repo.
 
+This project is developed with the help of Claude Code (Anthropic).
+
 ## What this is
 
 Home Assistant as an Open Farm Link Control Panel (`custom_components/ofl` +
 the `ofl-garden-card` Lovelace card), and a strict mock Head Device to build
 it against — see [README.md](README.md). Sibling repo to
-[open-farm-link](../open-farm-link) (the protocol spec) and
-[open-garden-rack](../open-garden-rack)/`ogr-*` (an unrelated, independent
+[open-farm-link](../../../specs/open-farm-link) (the protocol spec) and
+[open-garden-rack](../../../specs/open-garden-rack)/`ogr-*` (an unrelated, independent
 protocol — do not conflate the two, see `open-farm-link/AGENTS.md`'s own
 guardrail note on this).
 
@@ -182,6 +184,24 @@ Design decisions worth keeping:
   `pair_credentials` accepts an existing login/password instead.
   `async_remove_entry` DELETEs HA's own credential (frees a slot, §22.6).
 - After pairing, the `paired` step lists all credentials (§22.4 SHOULD).
+- **Bench mode** (`insecure: true` in entry data; user decision 2026-11-10,
+  TASK-1): for `open-farm-link-esp32`, which has no docs/22 support yet.
+  Offered only when mDNS TXT has no `pair=` (or ticked by hand), always
+  behind an explicit confirm step; `unique_id` = the device's own
+  `garden_id` (MAC-derived there). `OflClient(insecure=True)`: `http://`,
+  no pin, never an `Authorization` header. No re-auth (aborts
+  `insecure_no_auth`). Delete this path once the firmware implements §22.
+- Optional endpoints (`coordinator._optional`): 404 on Preferences / Grow
+  Profile / Hardware Calibration → `None`, entities for them aren't
+  created. In bench mode the 404 is remembered per *feature* (one System
+  calibration 404 settles it for all scopes); in secure mode it's only
+  per poll, so a Plant pulled mid-poll can't disable a feature for good.
+- No Hardware Calibration = raw values: `ScopeData.raw_formats` (from
+  `/modules`, every poll) → `raw_unit()` picks the unit/max from the
+  endpoint `format`; a raw reading gets no device class.
+- Actuator PUT answers are **merged** into the stored entry: the firmware
+  answers `{capability, value}` without `unit`, and replacing the entry
+  made the next `track_entities` pass create a *number* for the valve.
 - Time: if the device reports `source: "none"`, the coordinator PUTs HA's
   clock (§16.6 MAY; option `sync_time`, default on).
 - Entities are added dynamically (`entity.track_entities`) since Plants and

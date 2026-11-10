@@ -7,8 +7,13 @@
         "description": "Head Devices on this network are normally discovered automatically. Enter an address only if yours wasn't.",
         "data": {
           "host": "Host or IP address",
-          "port": "Port"
+          "port": "Port",
+          "insecure": "Bench mode: plain HTTP, no pairing (firmware without security)"
         }
+      },
+      "insecure_confirm": {
+        "title": "Add {name} without security?",
+        "description": "Found Garden **{name}** (`{garden_id}`, OFL {protocol_version}) at {host}.\n\nIts firmware doesn't support the protocol's security: no encryption, no pairing, no login. **Anyone on your network can read it and switch its valves and lights**, and Home Assistant can't tell whether it is talking to the real device.\n\nUse this only for a test rig on a network you trust. Add it anyway?"
       },
       "pair": {
         "title": "Pair with Garden {garden_id}",
@@ -59,7 +64,8 @@
       "already_configured": "This Garden is already set up.",
       "not_ofl_device": "Not an Open Farm Link Head Device.",
       "device_reset": "This Head Device has a new identity — it was factory reset, which makes it a new Garden. Remove this entry and add the device again.",
-      "reauth_successful": "Re-paired successfully."
+      "reauth_successful": "Re-paired successfully.",
+      "insecure_no_auth": "Bench-mode devices have no credentials to re-pair. Remove the entry and add the device again."
     }
   },
   "options": {

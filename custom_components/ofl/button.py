@@ -63,8 +63,8 @@ class WaterNowButton(OflEntity, ButtonEntity):
         try:
             async with self.coordinator.client.batch():
                 resp = await self.coordinator.client.put_actuator(self.scope_path, VALVE, 0)
-            if self.plant and isinstance(resp, dict):
-                self.plant.actuators[VALVE] = resp
+            if self.plant and isinstance(resp, dict) and VALVE in self.plant.actuators:
+                self.plant.actuators[VALVE] = {**self.plant.actuators[VALVE], **resp}
         except OflError:
             # Don't leave water running on a transient failure: keep retrying.
             self._cancel_close = async_call_later(self.hass, 5, self._close)

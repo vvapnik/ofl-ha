@@ -2,21 +2,21 @@
 
 Home Assistant as a Control Panel for the
 [Open Farm Link](https://github.com/vvapnik/open-farm-link) protocol (spec in
-the sibling repo `~/Garden/Code/open-farm-link`), plus a mock Head Device to
+the sibling repo `~/Lab/open-garden/specs/open-farm-link`), plus a mock Head Device to
 develop it against without hardware.
 
 ## Structure
 
 | Path | What |
 |---|---|
-| `custom_components/ofl` | The Home Assistant integration (Python). Discovers Head Devices over mDNS, pairs with them (button / setup code / existing login, [docs/22-security.md](../open-farm-link/docs/22-security.md)), pins each device's key, polls it, and exposes Vitals/Actuators/Grow Profile flags/Preferences as entities. Ships the card below and registers it on every dashboard by itself. |
+| `custom_components/ofl` | The Home Assistant integration (Python). Discovers Head Devices over mDNS, pairs with them (button / setup code / existing login, [docs/22-security.md](../../../specs/open-farm-link/docs/22-security.md)), pins each device's key, polls it, and exposes Vitals/Actuators/Grow Profile flags/Preferences as entities. Ships the card below and registers it on every dashboard by itself. |
 | `packages/ha-card` | `ofl-garden-card`, a Lovelace card (Lit + TypeScript): the rack at a glance — head unit + one tray per Plant — and a friendly per-plant view with moisture status, **Water now** and the light. Built into `custom_components/ofl/frontend/`. |
 | `packages/mock-server` | A mock Head Device (Express) following the protocol strictly: the full REST API with validation and Hardware Calibration, a Scenario engine, Vitals History, and the security/transport rules (HTTPS with a self-signed pinned key, auth on every request, pairing, credential management, brute-force limit, one connection at a time, 5 s idle timeout, mDNS with `pair=` in TXT). Simulated hardware changes go through a localhost-only control server. |
 | `packages/shared` | TypeScript types mirroring the spec entities, used by the mock. Hand-maintained against the spec. |
 | `tests/` | End-to-end tests: Home Assistant's own test harness driving the integration against a real mock server process. |
 
 The original React browser panel was archived to
-`../open-farm-link-panel-legacy` — a browser can't pin a self-signed device
+`../../../archive/open-farm-link-panel-legacy` — a browser can't pin a self-signed device
 key, so it can't be a compliant Control Panel on its own.
 
 ## Mock Head Device
@@ -47,7 +47,7 @@ curl -X PUT $H/hw/time -d '{"source":"none"}'               # reboot with no upl
 
 Its key, setup code and credentials persist in `packages/mock-server/.data/<port>/`
 like a real device's flash, so pairings survive restarts. Talk to it with curl
-the way [§22.5](../open-farm-link/docs/22-security.md#225-authenticating-requests) shows:
+the way [§22.5](../../../specs/open-farm-link/docs/22-security.md#225-authenticating-requests) shows:
 
 ```sh
 curl -k --pinnedpubkey 'sha256//…' -u user:'password' https://localhost/garden/plants
@@ -84,6 +84,21 @@ discovered. Pair it one of three ways:
 HA then shows every credential the device holds, as the spec recommends.
 Removing the integration revokes HA's own credential on the device.
 
+### Bench mode (firmware without security)
+
+The current [open-farm-link-esp32](../open-farm-link-esp32) firmware predates
+docs/22: plain HTTP on port 80, no pairing, no login, no `pair=` in its mDNS
+TXT. HA offers such a device as discovered and asks to confirm **adding it
+without security** (or tick *Bench mode* when entering a host by hand). Anyone
+on the LAN can control a device like that — use it only for a test rig.
+
+In bench mode HA sends no credentials, never pins anything, and copes with
+what that firmware lacks: no Preferences (no vacation/quiet-hours entities),
+no Grow Profile, no Hardware Calibration. Without calibration the device
+reports raw values, so the unit comes from the module's endpoint `format`
+(`percent` → %, `raw16` → a bare count up to 65535) instead of the catalog
+unit it claims — moisture shows as e.g. `8981`, not `8981 %`.
+
 Entities per Garden device: problem, clock source, vacation mode, quiet hours
 start/end, System vitals/actuators. Per Plant device: problem, each Vital as a
 sensor, binary Actuators as switches, others (light, pump) as numbers in
@@ -98,6 +113,9 @@ garden_id: spzihdhhcu4ddonm   # optional — defaults to the first Garden
 ```
 
 ## Tests
+
+`tests/test_e2e.py` drives the strict mock; `tests/test_bench.py` drives an
+in-process fake that answers like the ESP32 firmware (bench mode).
 
 ```sh
 python3.13 -m venv .venv && .venv/bin/pip install pytest-homeassistant-custom-component

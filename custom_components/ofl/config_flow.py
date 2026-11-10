@@ -31,9 +31,11 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_FINGERPRINT,
     CONF_GARDEN_ID,
+    CONF_INSECURE,
     CONF_SYNC_TIME,
     CONF_TOKEN,
     CONF_WATER_SECONDS,
+    DEFAULT_INSECURE_PORT,
     DEFAULT_PORT,
     DEFAULT_SYNC_TIME,
     DEFAULT_WATER_SECONDS,
@@ -78,6 +80,7 @@ class OflConfigFlow(ConfigFlow, domain=DOMAIN):
         self._entry_data: dict[str, Any] = {}
         self._clients: list[dict[str, Any]] = []
         self._reauth_entry: ConfigEntry | None = None
+        self._garden: dict[str, Any] | None = None  # bench mode: GET /garden, read before confirming
 
     # ---- Discovery ----------------------------------------------------------
 
@@ -95,6 +98,11 @@ class OflConfigFlow(ConfigFlow, domain=DOMAIN):
         self._garden_id = garden_id
         self._pair_hint = discovery_info.properties.get("pair")
         self.context["title_placeholders"] = {"name": garden_id}
+        if not self._pair_hint:
+            # No TXT pair= → firmware predates docs/22-security.md: no TLS,
+            # no pairing. Offer bench mode, which the user has to confirm.
+            self._port = discovery_info.port or DEFAULT_INSECURE_PORT
+            return await self.async_step_insecure_confirm()
         return await self.async_step_pair()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -102,6 +110,8 @@ class OflConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._host = user_input[CONF_HOST]
             self._port = user_input[CONF_PORT]
+            if user_input.get(CONF_INSECURE):
+                return await self.async_step_insecure_confirm()
             # Nothing is authenticated yet; just learn the device's key so the
             # Garden can be identified (garden_id derives from it, §22.2).
             client = OflClient(self._host, self._port)
@@ -123,9 +133,78 @@ class OflConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
-                {vol.Required(CONF_HOST): str, vol.Required(CONF_PORT, default=DEFAULT_PORT): int}
+                {
+                    vol.Required(CONF_HOST): str,
+                    vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
+                    vol.Optional(CONF_INSECURE, default=False): bool,
+                }
             ),
             errors=errors,
+        )
+
+    # ---- Bench mode (no docs/22 security on the device) -----------------------
+
+    async def async_step_insecure_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Plain HTTP, no credentials: anyone on the LAN can control this device.
+
+        Reads ``GET /garden`` first so the user sees which Garden they are
+        adding, and so a manually entered host gets its ``unique_id``.
+        """
+        assert self._host is not None
+        errors: dict[str, str] = {}
+        if self._garden is None:
+            client = OflClient(self._host, self._port, insecure=True)
+            try:
+                async with client.batch():
+                    garden = await client.get_garden()
+            except OflError as err:
+                errors["base"] = _error_key(err)
+                garden = None
+            if garden is not None:
+                garden_id = garden.get("garden_id")
+                if not garden_id or (self._garden_id and garden_id != self._garden_id):
+                    return self.async_abort(reason="not_ofl_device")
+                self._garden_id = garden_id
+                self._garden = garden
+                await self.async_set_unique_id(garden_id)
+                self._abort_if_unique_id_configured(updates={CONF_HOST: self._host, CONF_PORT: self._port})
+
+        if errors:
+            # Only reachable from the manual path; zeroconf already saw the device.
+            return self.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(CONF_HOST, default=self._host): str,
+                        vol.Required(CONF_PORT, default=self._port): int,
+                        vol.Optional(CONF_INSECURE, default=True): bool,
+                    }
+                ),
+                errors=errors,
+            )
+
+        assert self._garden is not None and self._garden_id is not None
+        name = self._garden.get("name") or self._garden_id
+        if user_input is not None:
+            return self.async_create_entry(
+                title=name,
+                data={
+                    CONF_HOST: self._host,
+                    CONF_PORT: self._port,
+                    CONF_GARDEN_ID: self._garden_id,
+                    CONF_INSECURE: True,
+                },
+            )
+        self.context["title_placeholders"] = {"name": name}
+        return self.async_show_form(
+            step_id="insecure_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "name": name,
+                "garden_id": self._garden_id,
+                "host": f"{self._host}:{self._port}",
+                "protocol_version": str(self._garden.get("protocol_version", "?")),
+            },
         )
 
     # ---- Pairing ------------------------------------------------------------
@@ -262,6 +341,8 @@ class OflConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         self._reauth_entry = self._get_reauth_entry()
+        if entry_data.get(CONF_INSECURE):
+            return self.async_abort(reason="insecure_no_auth")
         self._host = entry_data[CONF_HOST]
         self._port = entry_data[CONF_PORT]
         self._garden_id = entry_data[CONF_GARDEN_ID]

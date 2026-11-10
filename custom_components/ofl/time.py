@@ -20,7 +20,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: OflConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     c = entry.runtime_data
-    async_add_entities([QuietHoursTime(c, "from"), QuietHoursTime(c, "to")])
+    if c.data.preferences is not None:  # firmware without Preferences: nothing to show
+        async_add_entities([QuietHoursTime(c, "from"), QuietHoursTime(c, "to")])
 
 
 class QuietHoursTime(OflEntity, TimeEntity):
@@ -33,13 +34,13 @@ class QuietHoursTime(OflEntity, TimeEntity):
 
     @property
     def native_value(self) -> time | None:
-        window = self.coordinator.data.preferences.get("quiet_hours")
+        window = (self.coordinator.data.preferences or {}).get("quiet_hours")
         if not window or not window.get(self.end):
             return None
         return time.fromisoformat(window[self.end])
 
     async def async_set_value(self, value: time) -> None:
-        prefs = self.coordinator.data.preferences
+        prefs = self.coordinator.data.preferences or {}
         window = {**DEFAULTS, **(prefs.get("quiet_hours") or {}), self.end: value.strftime("%H:%M")}
         new_prefs = {**prefs, "quiet_hours": window}
         resp = await self._write(lambda: self.coordinator.client.put_preferences(new_prefs))

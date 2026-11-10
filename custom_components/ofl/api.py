@@ -14,6 +14,10 @@ Implements the transport rules a Control Panel has to live with
   slot isn't held idle while other clients (the official app) wait for it.
 - A second connection is refused by the device while another client holds
   the slot, so connection failures are retried with backoff.
+
+``insecure=True`` is the bench mode for firmware without docs/22 support:
+plain HTTP, nothing pinned, no ``Authorization`` header. The single-slot
+and batching rules still apply.
 """
 
 from __future__ import annotations
@@ -158,9 +162,11 @@ class OflClient:
         token: str | None = None,
         username: str | None = None,
         password: str | None = None,
+        insecure: bool = False,
     ) -> None:
         self.host = host
         self.port = port
+        self.insecure = insecure
         self.pin = SpkiPin(fingerprint_to_bytes(fingerprint) if fingerprint else None)
         self._auth_header: str | None = None
         if token:
@@ -173,7 +179,7 @@ class OflClient:
     @property
     def base_url(self) -> str:
         host = f"[{self.host}]" if ":" in self.host else self.host
-        return f"https://{host}:{self.port}"
+        return f"{'http' if self.insecure else 'https'}://{host}:{self.port}"
 
     @property
     def observed_fingerprint(self) -> str | None:
@@ -182,7 +188,9 @@ class OflClient:
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(limit=1, ssl=self.pin, keepalive_timeout=KEEPALIVE_SECONDS)
+            connector = aiohttp.TCPConnector(
+                limit=1, ssl=False if self.insecure else self.pin, keepalive_timeout=KEEPALIVE_SECONDS
+            )
             self._session = aiohttp.ClientSession(connector=connector, timeout=REQUEST_TIMEOUT)
         return self._session
 
@@ -212,7 +220,7 @@ class OflClient:
         self, method: str, path: str, *, json: Any = None, params: dict[str, str] | None = None, auth: bool = True
     ) -> Any:
         headers = {}
-        if auth and self._auth_header:
+        if auth and self._auth_header and not self.insecure:
             headers["Authorization"] = self._auth_header
 
         # The device refuses a second connection at the TCP level (§16.3), so
@@ -306,6 +314,9 @@ class OflClient:
 
     async def get_plants(self) -> list[dict[str, Any]]:
         return await self.request("GET", "/garden/plants")
+
+    async def get_modules(self, scope: str) -> list[dict[str, Any]]:
+        return (await self.request("GET", f"/garden/{scope}/modules"))["modules"]
 
     # ---- Plant / System sub-resources ---------------------------------------
     # ``scope`` is "plants/<id>" or "system" — same sub-resource shape (§16.5).

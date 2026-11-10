@@ -14,8 +14,13 @@ CONF_TOKEN: Final = "token"
 CONF_AUTH_METHOD: Final = "auth_method"  # "token" | "password"
 CONF_WATER_SECONDS: Final = "water_seconds"
 CONF_SYNC_TIME: Final = "sync_time"
+# Bench mode: plain HTTP, no pinning, no credentials — for Head Device
+# firmware that predates docs/22-security.md (no TXT ``pair=``). Never the
+# default; the user confirms it explicitly in the config flow.
+CONF_INSECURE: Final = "insecure"
 
 DEFAULT_PORT: Final = 443  # docs/16-rest-api.md §16.1
+DEFAULT_INSECURE_PORT: Final = 80
 DEFAULT_SCAN_INTERVAL: Final = timedelta(seconds=30)
 DEFAULT_WATER_SECONDS: Final = 5
 DEFAULT_SYNC_TIME: Final = True

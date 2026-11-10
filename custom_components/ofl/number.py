@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import BINARY_ACTUATOR_UNIT
-from .coordinator import OflConfigEntry, OflCoordinator
+from .coordinator import OflConfigEntry, OflCoordinator, raw_unit
 from .entity import OflEntity, scopes, track_entities
 from .sensor import UNIT_MAP
 
@@ -39,9 +39,12 @@ class ActuatorNumber(OflEntity, NumberEntity):
         super().__init__(coordinator, scope, "actuator", capability)
         self._attr_translation_key = capability if capability in ("dimmer", "pump", "vibro") else "actuator"
         self._attr_translation_placeholders = {"capability": capability}
-        unit = self.scope_data.actuators[capability].get("unit")
+        declared = self.scope_data.actuators[capability].get("unit")
+        unit, raw_max = raw_unit(self.scope_data, capability, declared)
         self._attr_native_unit_of_measurement = UNIT_MAP.get(unit, unit)
-        self._attr_native_max_value = self.scope_data.actuator_max.get(capability) or FALLBACK_MAX.get(unit, 100.0)
+        self._attr_native_max_value = (
+            self.scope_data.actuator_max.get(capability) or raw_max or FALLBACK_MAX.get(unit, 100.0)
+        )
 
     @property
     def available(self) -> bool:
@@ -56,5 +59,6 @@ class ActuatorNumber(OflEntity, NumberEntity):
         payload = int(value) if value.is_integer() else value
         resp = await self._write(lambda: self.coordinator.client.put_actuator(self.scope_path, self.key, payload))
         if isinstance(resp, dict) and "value" in resp:
-            self.scope_data.actuators[self.key] = resp
+            # Merge: a device may answer with just {capability, value}.
+            self.scope_data.actuators[self.key] = {**self.scope_data.actuators[self.key], **resp}
         self.coordinator.async_update_listeners()

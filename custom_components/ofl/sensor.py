@@ -7,7 +7,7 @@ from homeassistant.const import PERCENTAGE, EntityCategory, LIGHT_LUX, UnitOfLen
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .coordinator import OflConfigEntry, OflCoordinator
+from .coordinator import OflConfigEntry, OflCoordinator, raw_unit
 from .entity import GARDEN, OflEntity, scopes, track_entities
 
 # Capability Catalog sensor keys (docs/20-capability-catalog.md §20.1).
@@ -50,8 +50,11 @@ class VitalSensor(OflEntity, SensorEntity):
         super().__init__(coordinator, scope, "vital", vital_type)
         self._attr_translation_key = vital_type if vital_type in VITAL_DEVICE_CLASS or vital_type == "water_level" else "vital"
         self._attr_translation_placeholders = {"type": vital_type}
-        self._attr_device_class = VITAL_DEVICE_CLASS.get(vital_type)
-        unit = (self.scope_data.vitals.get(vital_type) or {}).get("unit") if self.scope_data else None
+        declared = (self.scope_data.vitals.get(vital_type) or {}).get("unit") if self.scope_data else None
+        unit, _ = raw_unit(self.scope_data, vital_type, declared) if self.scope_data else (declared, None)
+        # A raw reading (uncalibrated device) is a bare count, not the
+        # catalog's physical quantity — no device class that implies a unit.
+        self._attr_device_class = VITAL_DEVICE_CLASS.get(vital_type) if unit == declared else None
         self._attr_native_unit_of_measurement = UNIT_MAP.get(unit, unit)
 
     @property

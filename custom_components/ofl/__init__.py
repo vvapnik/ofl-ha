@@ -20,7 +20,15 @@ from homeassistant.helpers.typing import ConfigType
 
 from . import websocket
 from .api import OflClient, OflError
-from .const import CARD_FILENAME, CONF_CLIENT_ID, CONF_FINGERPRINT, CONF_TOKEN, DOMAIN, FRONTEND_URL_BASE
+from .const import (
+    CARD_FILENAME,
+    CONF_CLIENT_ID,
+    CONF_FINGERPRINT,
+    CONF_INSECURE,
+    CONF_TOKEN,
+    DOMAIN,
+    FRONTEND_URL_BASE,
+)
 from .coordinator import OflConfigEntry, OflCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,10 +64,11 @@ def _client_for(entry: OflConfigEntry) -> OflClient:
     return OflClient(
         d[CONF_HOST],
         d[CONF_PORT],
-        fingerprint=d[CONF_FINGERPRINT],
+        fingerprint=d.get(CONF_FINGERPRINT),
         token=d.get(CONF_TOKEN),
         username=d.get(CONF_USERNAME),
         password=d.get(CONF_PASSWORD),
+        insecure=d.get(CONF_INSECURE, False),
     )
 
 
