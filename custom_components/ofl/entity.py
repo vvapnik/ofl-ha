@@ -83,11 +83,12 @@ class OflEntity(CoordinatorEntity[OflCoordinator]):
         if self.scope in (GARDEN, SYSTEM):
             return
         # Plant device → Garden device (the Garden device is created in async_setup_entry).
-        reg = dr.async_get(self.hass)
-        garden = reg.async_get_device(identifiers={(DOMAIN, self._garden_id)})
-        plant = reg.async_get_device(identifiers={(DOMAIN, plant_device_identifier(self._garden_id, self.scope))})
-        if garden and plant and plant.via_device_id != garden.id:
-            reg.async_update_device(plant.id, via_device_id=garden.id)
+        # No registry lookups by identifier: async_get_device is deprecated in
+        # 2026.11 and its replacement doesn't exist in 2025.4.
+        garden_device_id = self.coordinator.garden_device_id
+        plant = self.device_entry
+        if garden_device_id and plant and plant.via_device_id != garden_device_id:
+            dr.async_get(self.hass).async_update_device(plant.id, via_device_id=garden_device_id)
 
     @property
     def scope_path(self) -> str:

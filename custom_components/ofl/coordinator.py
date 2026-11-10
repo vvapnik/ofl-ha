@@ -99,6 +99,7 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             hass, _LOGGER, config_entry=entry, name=f"{DOMAIN} {entry.title}", update_interval=DEFAULT_SCAN_INTERVAL
         )
         self.client = client
+        self.garden_device_id: str | None = None  # set in async_setup_entry
         # Hardware Calibration is library data that only changes with the
         # hardware itself, so it's fetched once per scope, not every poll.
         self._calibration_max: dict[str, dict[str, float] | None] = {}  # None: no calibration
