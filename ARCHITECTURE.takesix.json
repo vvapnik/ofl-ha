@@ -1,0 +1,127 @@
+{
+  "takesix": "1.0",
+  "title": "open-farm-link-panel",
+  "description": "Home Assistant as an OFL Control Panel, and a strict mock Head Device to build it against",
+  "blocks": [
+    {
+      "id": "card",
+      "at": "A1:C1",
+      "icon": "🪴",
+      "title": "Lovelace card",
+      "description": "packages/ha-card (Lit)",
+      "details": "Source: `packages/ha-card/src/` (`ofl-garden-card.ts`, `styles.ts`, `i18n.ts`, `types.ts`)\n\n- `ofl-garden-card` (Lit + TypeScript): the head unit plus one tray per Plant, and a per-plant view with moisture status, **Water now** and the light.\n- Gets *structure* (plants, species, targets, entity ids) from the integration's `ofl/gardens` websocket command; live values come from `hass.states`; actions are plain entity service calls. The card never speaks OFL and never sees a credential.\n- `npm run build:card` builds it into `custom_components/ofl/frontend/ofl-garden-card.js` (a committed artifact, so HACS users need no npm).\n- Themed via HA CSS variables; strings in English and Russian."
+    },
+    {
+      "id": "integration",
+      "at": "A3:C3",
+      "icon": "🏠",
+      "title": "HA integration",
+      "description": "custom_components/ofl (Python)",
+      "children": [
+        {
+          "id": "int-flow",
+          "at": "A1:B2",
+          "icon": "🔑",
+          "title": "Config flow",
+          "description": "Discover and pair",
+          "details": "Source: `custom_components/ofl/config_flow.py`\n\n- Zeroconf discovery; `unique_id` = `garden_id`; rediscovery updates host/port of the existing entry.\n- Pairing: button window, setup code (always runs the challenge first, so a wrong code is never sent), or an existing login.\n- Creates a token named \"Home Assistant\", then lists all credentials on the device.\n- Factory reset → pin mismatch → re-auth aborts with `device_reset`.\n- **Bench mode** (`insecure: true`): for `open-farm-link-esp32` firmware without docs/22 support; behind an explicit confirm step."
+        },
+        {
+          "id": "int-client",
+          "at": "C1:D2",
+          "icon": "🔒",
+          "title": "OflClient",
+          "description": "api.py: one slot",
+          "details": "Source: `custom_components/ofl/api.py`\n\n- One client per device with its own aiohttp session, `TCPConnector(limit=1)`.\n- Requests grouped in `async with client.batch()`; the session closes after each batch so the device's single connection slot is freed.\n- **SPKI pinning** via `SpkiPin` (checked before any request is written); `expected=None` only during pairing.\n- Retries span more than 5 s, past the device's idle timeout; after a request may have been sent only GET/PUT/DELETE are retried.\n- Bench mode: plain `http://`, no pin, no `Authorization`."
+        },
+        {
+          "id": "int-coordinator",
+          "at": "E1:F2",
+          "icon": "⏱",
+          "title": "Coordinator",
+          "description": "Polling",
+          "details": "Sources: `custom_components/ofl/coordinator.py`, `custom_components/ofl/__init__.py`\n\n- One config entry and one coordinator per Head Device (= one Garden).\n- OFL has no push channel, so it polls: `6 + 3·plants` sequential requests per refresh, plus Hardware Calibration once per scope.\n- Optional endpoints (Preferences, Grow Profile, Hardware Calibration) may 404; their entities are then not created.\n- Without calibration, units come from the endpoint `format` (`raw_formats`).\n- If the device clock source is `none`, it PUTs HA's time (option `sync_time`)."
+        },
+        {
+          "id": "int-entities",
+          "at": "A4:D5",
+          "icon": "🎛",
+          "title": "Entities",
+          "description": "entity.py + sensor, switch, number, button, time, binary_sensor",
+          "details": "Sources: `custom_components/ofl/entity.py`, `sensor.py`, `binary_sensor.py`, `switch.py`, `number.py`, `button.py`, `time.py`\n\n- Devices: the Garden (with System's shared modules) and one device per Plant, linked to the Garden.\n- Vitals → sensors; binary Actuators → switches; other Actuators → numbers in physical units; Grow Profile `*_enabled` flags and vacation mode → switches; quiet hours → two time entities; `status` → problem binary sensors.\n- **Water now** button: opens the valve and closes it from HA (the Actuators API has no duration).\n- Entities come and go with hardware (`track_entities`). Unique IDs `{garden_id}_{scope}_{kind}_{key}` are used by the card: don't change them casually."
+        },
+        {
+          "id": "int-card-backend",
+          "at": "E4:F5",
+          "icon": "🔌",
+          "title": "Card backend",
+          "description": "websocket.py",
+          "details": "Sources: `custom_components/ofl/websocket.py`, `custom_components/ofl/frontend/`, `custom_components/ofl/diagnostics.py`\n\n- `ofl/gardens` websocket command: each Garden's structure and the entity behind each value.\n- Serves the built card at `/ofl_static/` and registers it on every dashboard (`add_extra_js_url`).\n- Diagnostics never include the credential."
+        }
+      ]
+    },
+    {
+      "id": "device",
+      "at": "A5:C5",
+      "icon": "📟",
+      "title": "Mock Head Device",
+      "description": "packages/mock-server (Express)",
+      "children": [
+        {
+          "id": "mock-rest",
+          "at": "A1:C2",
+          "icon": "⇄",
+          "title": "REST surface",
+          "description": "index.ts, validate.ts, http.ts, scenarios.ts",
+          "details": "Sources: `packages/mock-server/src/index.ts`, `validate.ts`, `http.ts`, `scenarios.ts`\n\n- The full OFL REST API; Plant and System share one sub-resource router.\n- Every body validated (400 keeps only spec-defined fields); every error in the §16.2 JSON shape.\n- Scenarios are reachable only through their own target's path; ids are device-assigned (`scn-N`); capability checks on create, update and Culture Pack import.\n- Where the spec is silent, the chosen interpretations are listed in `AGENTS.md`."
+        },
+        {
+          "id": "mock-security",
+          "at": "D1:F2",
+          "icon": "🔑",
+          "title": "Security and transport",
+          "description": "security/, transport.ts, mdns.ts",
+          "details": "Sources: `packages/mock-server/src/security/identity.ts`, `security/device.ts`, `security/routes.ts`, `transport.ts`, `mdns.ts`\n\n- ECDSA P-256 key and self-signed cert via `openssl`; `fingerprint` and `garden_id` derived per §22.2.\n- Setup code, pairing window, tokens and PBKDF2 passwords, brute-force limit, factory reset.\n- HTTPS, one connection at a time, 5 s idle timeout.\n- mDNS: claims the first free `ofl-peer{N}.local`, TXT `pair=button` / `pair=code`.\n- Key, setup code and credentials persist in `.data/<port>/`."
+        },
+        {
+          "id": "mock-sim",
+          "at": "A4:C5",
+          "icon": "🌱",
+          "title": "Simulated garden",
+          "description": "state, library, derive, engine, history",
+          "details": "Sources: `packages/mock-server/src/state.ts`, `library.ts`, `derive.ts`, `engine.ts`, `history.ts`\n\n- `library.ts`: hardware-model blueprints with their Hardware Calibration and default Settings.\n- `derive.ts`: calibration on every Vitals/Actuators read and write, then Grow Profile sensor offsets.\n- `engine.ts`: the Scenario engine plus a tiny physics (an open valve raises moisture, a running pump drains the tank).\n- `history.ts`: 24 hourly records backfilled, then a sample every `OFL_HISTORY_PERIOD_S`.\n- Garden data is in memory and re-seeds on restart."
+        },
+        {
+          "id": "mock-control",
+          "at": "D4:F5",
+          "icon": "🕹",
+          "title": "Hardware control",
+          "description": "control.ts, hardware.ts: 127.0.0.1 only",
+          "details": "Sources: `packages/mock-server/src/control.ts`, `hardware.ts`\n\n- A plain-HTTP server on `127.0.0.1:4380` standing in for the device's physical side; not part of OFL.\n- Pairing button: `npm run button`, `npm run factory-reset`, `npm run mock:status`.\n- `/hw/...`: plug or pull a Plant or module, set a sensor reading, fault a module, change the clock uplink. Capabilities are revalidated after each change.\n\nThe real rig (`open-farm-link-esp32` firmware, bench mode) is a separate repo; see `README.md`."
+        }
+      ]
+    },
+    {
+      "id": "tests",
+      "at": "E3:F3",
+      "icon": "🧪",
+      "title": "E2E tests",
+      "description": "HA harness",
+      "details": "Sources: `tests/test_e2e.py`, `tests/test_bench.py`, `tests/conftest.py`, `pytest.ini`\n\n- Home Assistant's own test harness (`pytest-homeassistant-custom-component`, pins HA 2025.4.4) drives the integration.\n- `test_e2e.py` runs against real mock-server processes in strict mode: pairing, entities, writes, websocket, factory reset, retries, zeroconf.\n- `test_bench.py` runs against an in-process fake that answers like the ESP32 firmware (bench mode).\n- Run: `npm run test:ha` (needs `.venv` and Node 20 via nvm)."
+    },
+    {
+      "id": "shared",
+      "at": "E5:F5",
+      "icon": "📐",
+      "title": "Shared types",
+      "description": "packages/shared",
+      "details": "Sources: `packages/shared/src/entities.ts`, `packages/shared/src/catalog.ts`\n\nTypeScript types mirroring the OFL spec entities and the capability catalog, used by the mock. Maintained by hand against the spec in `specs/open-farm-link`."
+    }
+  ],
+  "links": [
+    { "from": "card", "to": "integration", "label": "websocket" },
+    { "from": "integration", "to": "device", "label": "OFL HTTPS" },
+    { "from": "tests", "to": "integration", "label": "drive", "style": "dashed" },
+    { "from": "shared", "to": "device", "label": "types", "style": "dashed" }
+  ]
+}

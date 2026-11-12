@@ -15,6 +15,9 @@ develop it against without hardware.
 | `packages/shared` | TypeScript types mirroring the spec entities, used by the mock. Hand-maintained against the spec. |
 | `tests/` | End-to-end tests: Home Assistant's own test harness driving the integration against a real mock server process. |
 
+A zoomable map of these parts is in
+[`ARCHITECTURE.takesix.json`](ARCHITECTURE.takesix.json) (a TakeSix diagram).
+
 The original React browser panel was archived to
 `../../../archive/open-farm-link-panel-legacy` — a browser can't pin a self-signed device
 key, so it can't be a compliant Control Panel on its own.

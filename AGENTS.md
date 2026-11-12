@@ -2,6 +2,11 @@
 
 Guidance for AI agents working in this repo.
 
+Project map: `ARCHITECTURE.takesix.json` — read it first. It shows the card,
+the integration, the mock Head Device, the shared types and the tests, with
+file paths for each part. When files or responsibilities move, update it so
+its paths still match the code.
+
 This project is developed with the help of Claude Code (Anthropic).
 
 ## What this is
