@@ -256,6 +256,20 @@ step: valve on/off, dimmer 50 → 100, Water now opened the valve and HA
 closed it 2 s later. No `ofl` errors or deprecation warnings in the log.
 The card was not looked at on a real dashboard yet.
 
+### Moisture calibration (2026-11-13, TASK-104)
+
+A pot reports raw NE555 counts; the Head Device maps them to % between
+`moisture_dry_raw` / `moisture_wet_raw` in the pot module's Settings
+(`open-farm-link/docs/07-settings.md` §7.3). Per Plant whose Settings carry
+those fields: buttons "Calibrate moisture: dry / in water" (store the
+current raw reading — refreshed first, not the last poll's), two CONFIG
+numbers for manual edits, a DIAGNOSTIC raw sensor; plus the service
+`ofl.set_moisture_calibration {dry_raw, wet_raw}` writing one batch pair to
+every pot of every entry. Settings PUT replaces the whole module entry, so
+`async_set_moisture_points` sends the full entry back. Verified against the
+real rig through a throwaway pytest (HA test harness, bench mode) — not yet
+on the HA OS install, which pulls from GitHub `main`.
+
 ## Known gaps / open points
 
 - **Water now times the close in HA.** The Actuators API has no duration
@@ -269,7 +283,7 @@ The card was not looked at on a real dashboard yet.
   "bulk read endpoint" input to the concurrent-access open question in
   `open-farm-link/AGENTS.md`.
 - Not exposed yet: Scenarios (list/edit), Culture Pack import, Vitals
-  History, Settings, raw Modules, `max_brightness`, credential management
+  History, Settings (except the moisture points below), raw Modules, `max_brightness`, credential management
   beyond the post-pairing list (no UI to revoke other clients).
 - No options-flow/diagnostics tests; card has no visual editor.
 - Secure mode never run against real hardware: the only firmware

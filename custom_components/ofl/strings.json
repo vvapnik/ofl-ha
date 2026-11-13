@@ -87,6 +87,12 @@
     "button": {
       "water_now": {
         "name": "Water now"
+      },
+      "calibrate_dry": {
+        "name": "Calibrate moisture: dry"
+      },
+      "calibrate_wet": {
+        "name": "Calibrate moisture: in water"
       }
     },
     "number": {
@@ -101,6 +107,12 @@
       },
       "actuator": {
         "name": "{capability}"
+      },
+      "moisture_dry_raw": {
+        "name": "Moisture dry point"
+      },
+      "moisture_wet_raw": {
+        "name": "Moisture wet point"
       }
     },
     "sensor": {
@@ -135,6 +147,9 @@
           "manual": "Set manually",
           "none": "Not set"
         }
+      },
+      "moisture_raw": {
+        "name": "Moisture raw"
       }
     },
     "switch": {
@@ -172,6 +187,22 @@
       },
       "quiet_hours_to": {
         "name": "Quiet hours end"
+      }
+    }
+  },
+  "services": {
+    "set_moisture_calibration": {
+      "name": "Set moisture calibration",
+      "description": "Write one dry/wet pair (raw sensor units) to every pot — e.g. a batch calibration measured on one reference pot.",
+      "fields": {
+        "dry_raw": {
+          "name": "Dry (in air)",
+          "description": "Raw reading with the dry pot in air."
+        },
+        "wet_raw": {
+          "name": "Wet (in water)",
+          "description": "Raw reading with the sensor in water."
+        }
       }
     }
   }

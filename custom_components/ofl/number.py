@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .api import OflError
 from .const import BINARY_ACTUATOR_UNIT
 from .coordinator import OflConfigEntry, OflCoordinator, raw_unit
 from .entity import OflEntity, scopes, track_entities
@@ -25,6 +28,10 @@ async def async_setup_entry(
             for cap, act in data.actuators.items():
                 if act.get("unit") != BINARY_ACTUATOR_UNIT:
                     factories[f"{scope}/{cap}"] = lambda s=scope, k=cap: ActuatorNumber(c, s, k)
+        for pid, plant in c.data.plants.items():
+            if plant.moisture_cal is not None:
+                for point in ("dry", "wet"):
+                    factories[f"{pid}/moisture_{point}_raw"] = lambda p=pid, k=point: MoisturePointNumber(c, p, k)
         return factories
 
     track_entities(entry, async_add_entities, build)
@@ -62,3 +69,34 @@ class ActuatorNumber(OflEntity, NumberEntity):
             # Merge: a device may answer with just {capability, value}.
             self.scope_data.actuators[self.key] = {**self.scope_data.actuators[self.key], **resp}
         self.coordinator.async_update_listeners()
+
+
+class MoisturePointNumber(OflEntity, NumberEntity):
+    """A pot's dry/wet point in raw sensor units (OGR Raw16), for manual edits."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_native_min_value = 0
+    _attr_native_max_value = 65535
+    _attr_native_step = 1
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str, point: str) -> None:
+        super().__init__(coordinator, plant_id, "number", f"moisture_{point}_raw")
+        self._point = point
+        self._attr_translation_key = f"moisture_{point}_raw"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.plant.moisture_cal is not None
+
+    @property
+    def native_value(self) -> float | None:
+        cal = self.plant.moisture_cal if self.plant else None
+        value = getattr(cal, self._point) if cal else None
+        return None if value is None else float(value)
+
+    async def async_set_native_value(self, value: float) -> None:
+        try:
+            await self.coordinator.async_set_moisture_points(self.scope, **{self._point: int(value)})
+        except OflError as err:
+            raise HomeAssistantError(f"Head Device rejected the calibration: {err}") from err

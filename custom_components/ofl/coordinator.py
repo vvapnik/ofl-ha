@@ -49,6 +49,27 @@ class ScopeData:
     raw_formats: dict[str, str] = field(default_factory=dict)
 
 
+# Settings fields holding a pot's moisture dry/wet points (docs/07 §7.3): the
+# Head Device maps the module's raw reading to % between them (docs/06 §6.1).
+DRY_RAW = "moisture_dry_raw"
+WET_RAW = "moisture_wet_raw"
+
+
+@dataclass
+class MoistureCalibration:
+    module_id: str
+    settings: dict[str, Any]  # the module's whole Settings entry (PUT replaces it)
+    raw: int | None  # current raw reading from Modules, what a "capture" stores
+
+    @property
+    def dry(self) -> int | None:
+        return self.settings.get(DRY_RAW)
+
+    @property
+    def wet(self) -> int | None:
+        return self.settings.get(WET_RAW)
+
+
 @dataclass
 class PlantData(ScopeData):
     plant_id: str = ""
@@ -56,6 +77,7 @@ class PlantData(ScopeData):
     description: str = ""
     status: str = "ok"
     grow_profile: dict[str, Any] = field(default_factory=dict)
+    moisture_cal: MoistureCalibration | None = None  # None: no raw-moisture module
 
 
 @dataclass
@@ -153,6 +175,7 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             )
             await self._fill_scope(plant, f"plants/{pid}")
             plant.grow_profile = await self._optional("grow_profile", lambda p=pid: c.get_grow_profile(p)) or {}
+            plant.moisture_cal = await self._moisture_calibration(f"plants/{pid}")
             plants[pid] = plant
 
         return GardenData(garden=garden, preferences=preferences, time=time, system=system, plants=plants)
@@ -174,6 +197,38 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             for ep in module.get("endpoints", [])
             if "type" in ep and "format" in ep
         }
+
+    async def _moisture_calibration(self, scope: str) -> MoistureCalibration | None:
+        """The pot module whose Settings carry dry/wet points, and its raw reading."""
+        entries = await self._optional("settings", lambda: self.client.get_settings(scope))
+        entry = next((e for e in entries or [] if DRY_RAW in (e.get("settings") or {})), None)
+        if entry is None:
+            return None
+        raw = None
+        for module in await self.client.get_modules(scope):
+            if module.get("id") != entry["module_id"]:
+                continue
+            raw = next((ep.get("value") for ep in module.get("endpoints", []) if ep.get("type") == "moisture"), None)
+        return MoistureCalibration(entry["module_id"], dict(entry["settings"]), raw)
+
+    async def async_set_moisture_points(
+        self, plant_id: str, dry: int | None = None, wet: int | None = None
+    ) -> None:
+        """Write one or both points, keeping the rest of the module's Settings."""
+        plant = self.data.plants.get(plant_id)
+        cal = plant.moisture_cal if plant else None
+        if cal is None:
+            raise OflError(f"plant {plant_id} has no raw moisture sensor")
+        settings = dict(cal.settings)
+        if dry is not None:
+            settings[DRY_RAW] = int(dry)
+        if wet is not None:
+            settings[WET_RAW] = int(wet)
+        async with self.client.batch():
+            resp = await self.client.put_settings(f"plants/{plant_id}", cal.module_id, settings)
+        cal.settings = dict(resp.get("settings") or settings)
+        self.async_update_listeners()
+        await self.async_request_refresh()  # Vitals change with the points
 
     async def _calibration_maxima(self, scope: str) -> dict[str, float] | None:
         calibrations = await self._optional("hardware_calibration", lambda: self.client.get_hardware_calibration(scope))

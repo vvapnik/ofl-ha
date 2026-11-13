@@ -333,6 +333,13 @@ class OflClient:
     async def get_hardware_calibration(self, scope: str) -> list[dict[str, Any]]:
         return (await self.request("GET", f"/garden/{scope}/hardware-calibration"))["calibrations"]
 
+    async def get_settings(self, scope: str) -> list[dict[str, Any]]:
+        return (await self.request("GET", f"/garden/{scope}/settings"))["settings"]
+
+    async def put_settings(self, scope: str, module_id: str, settings: dict[str, Any]) -> dict[str, Any]:
+        """Replaces that module's whole entry (docs/07) — send every field to keep."""
+        return await self.request("PUT", f"/garden/{scope}/settings/{module_id}", json={"settings": settings})
+
     async def get_grow_profile(self, plant_id: str) -> dict[str, Any]:
         return await self.request("GET", f"/garden/plants/{plant_id}/grow-profile")
 

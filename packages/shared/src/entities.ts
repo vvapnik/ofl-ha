@@ -47,6 +47,8 @@ export interface SettingsEntry {
   module_id: string;
   settings: {
     mount_height_mm?: number;
+    moisture_dry_raw?: number;
+    moisture_wet_raw?: number;
     [key: string]: unknown;
   };
 }

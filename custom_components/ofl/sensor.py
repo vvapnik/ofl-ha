@@ -38,6 +38,9 @@ async def async_setup_entry(
         for scope, data in scopes(c.data):
             for vtype in data.vitals:
                 factories[f"{scope}/{vtype}"] = lambda s=scope, t=vtype: VitalSensor(c, s, t)
+        for pid, plant in c.data.plants.items():
+            if plant.moisture_cal is not None:
+                factories[f"{pid}/moisture_raw"] = lambda p=pid: MoistureRawSensor(c, p)
         return factories
 
     track_entities(entry, async_add_entities, build)
@@ -81,3 +84,23 @@ class TimeSourceSensor(OflEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         return self.coordinator.data.time.get("source")
+
+
+class MoistureRawSensor(OflEntity, SensorEntity):
+    """The pot's raw moisture reading — what the calibrate buttons capture."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "moisture_raw"
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str) -> None:
+        super().__init__(coordinator, plant_id, "diag", "moisture_raw")
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.plant.moisture_cal is not None
+
+    @property
+    def native_value(self) -> int | None:
+        cal = self.plant.moisture_cal if self.plant else None
+        return cal.raw if cal else None

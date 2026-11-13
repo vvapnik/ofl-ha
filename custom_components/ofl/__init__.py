@@ -10,10 +10,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import voluptuous as vol
+
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
@@ -49,6 +52,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Serve the Lovelace card from the integration itself and load it on every dashboard."""
     websocket.async_register(hass)
+    _register_services(hass)
     # Both are always loaded in a real install (default_config); a bare
     # test harness has neither the frontend nor its extra-module registry.
     if hass.http is not None and "frontend" in hass.config.components:
@@ -58,6 +62,44 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
     return True
+
+
+SERVICE_SET_MOISTURE_CALIBRATION = "set_moisture_calibration"
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Batch calibration: pots of one batch share sensor PCBA and wall, so one
+    dry/wet pair measured on a reference pot goes to every pot at once."""
+
+    async def set_moisture_calibration(call: ServiceCall) -> None:
+        dry, wet = call.data["dry_raw"], call.data["wet_raw"]
+        if dry == wet:
+            raise HomeAssistantError("dry_raw and wet_raw must differ")
+        updated = 0
+        for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+            coordinator: OflCoordinator = entry.runtime_data
+            for pid, plant in coordinator.data.plants.items():
+                if plant.moisture_cal is None:
+                    continue
+                try:
+                    await coordinator.async_set_moisture_points(pid, dry=dry, wet=wet)
+                except OflError as err:
+                    raise HomeAssistantError(f"{entry.title} / {plant.name}: {err}") from err
+                updated += 1
+        if updated == 0:
+            raise HomeAssistantError("No pot with a raw moisture sensor found")
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_MOISTURE_CALIBRATION,
+        set_moisture_calibration,
+        schema=vol.Schema(
+            {
+                vol.Required("dry_raw"): vol.All(vol.Coerce(int), vol.Range(min=0, max=65535)),
+                vol.Required("wet_raw"): vol.All(vol.Coerce(int), vol.Range(min=0, max=65535)),
+            }
+        ),
+    )
 
 
 def _client_for(entry: OflConfigEntry) -> OflClient:

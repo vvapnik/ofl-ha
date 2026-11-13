@@ -11,7 +11,9 @@ write is attempted on unload, but a crash skips that. A device-side
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
@@ -27,9 +29,14 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: OflConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     def build(c: OflCoordinator):
-        return {
+        factories = {
             pid: (lambda p=pid: WaterNowButton(c, p)) for pid, plant in c.data.plants.items() if VALVE in plant.actuators
         }
+        for pid, plant in c.data.plants.items():
+            if plant.moisture_cal is not None:
+                for point in ("dry", "wet"):
+                    factories[f"{pid}/calibrate_{point}"] = lambda p=pid, k=point: CalibrateMoistureButton(c, p, k)
+        return factories
 
     track_entities(entry, async_add_entities, build)
 
@@ -77,3 +84,32 @@ class WaterNowButton(OflEntity, ButtonEntity):
             if self._cancel_close:  # retry got scheduled; we're going away
                 self._cancel_close()
                 self._cancel_close = None
+
+
+class CalibrateMoistureButton(OflEntity, ButtonEntity):
+    """Store the pot's current raw moisture reading as its dry (in air) or wet
+    (in water) point — the Head Device maps raw to % between them."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str, point: str) -> None:
+        super().__init__(coordinator, plant_id, "button", f"calibrate_{point}")
+        self._point = point
+        self._attr_translation_key = f"calibrate_{point}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.plant.moisture_cal is not None
+
+    async def async_press(self) -> None:
+        # Fresh reading, not the one from the last poll (up to 30 s old).
+        await self.coordinator.async_refresh()
+        cal = self.plant.moisture_cal if self.plant else None
+        if cal is None or cal.raw is None:
+            raise HomeAssistantError("No raw moisture reading from the pot right now")
+        try:
+            await self.coordinator.async_set_moisture_points(
+                self.scope, **{self._point: cal.raw}
+            )
+        except OflError as err:
+            raise HomeAssistantError(f"Head Device rejected the calibration: {err}") from err
