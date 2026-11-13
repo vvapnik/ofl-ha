@@ -70,6 +70,23 @@ class MoistureCalibration:
         return self.settings.get(WET_RAW)
 
 
+LUX_CURVE = "dimmer_lux_curve"
+
+
+@dataclass
+class LightCalibration:
+    """A Plant's light module: its PWM -> lux points (docs/07 §7.3) and current PWM."""
+
+    module_id: str
+    endpoint: int  # the dimmer endpoint's index, for raw PWM writes while calibrating
+    settings: dict[str, Any]
+    pwm: float | None  # raw command (0-100 %), what "Add point" pairs with the measured lux
+
+    @property
+    def curve(self) -> list[dict[str, float]]:
+        return list(self.settings.get(LUX_CURVE) or [])
+
+
 @dataclass
 class PlantData(ScopeData):
     plant_id: str = ""
@@ -78,6 +95,7 @@ class PlantData(ScopeData):
     status: str = "ok"
     grow_profile: dict[str, Any] = field(default_factory=dict)
     moisture_cal: MoistureCalibration | None = None  # None: no raw-moisture module
+    light_cal: LightCalibration | None = None  # None: no dimmer module
 
 
 @dataclass
@@ -175,7 +193,7 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             )
             await self._fill_scope(plant, f"plants/{pid}")
             plant.grow_profile = await self._optional("grow_profile", lambda p=pid: c.get_grow_profile(p)) or {}
-            plant.moisture_cal = await self._moisture_calibration(f"plants/{pid}")
+            plant.moisture_cal, plant.light_cal = await self._module_calibrations(f"plants/{pid}")
             plants[pid] = plant
 
         return GardenData(garden=garden, preferences=preferences, time=time, system=system, plants=plants)
@@ -198,18 +216,45 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             if "type" in ep and "format" in ep
         }
 
-    async def _moisture_calibration(self, scope: str) -> MoistureCalibration | None:
-        """The pot module whose Settings carry dry/wet points, and its raw reading."""
+    async def _module_calibrations(
+        self, scope: str
+    ) -> tuple[MoistureCalibration | None, LightCalibration | None]:
+        """Pot dry/wet points and light PWM->lux points, with the raw readings they pair with."""
         entries = await self._optional("settings", lambda: self.client.get_settings(scope))
-        entry = next((e for e in entries or [] if DRY_RAW in (e.get("settings") or {})), None)
-        if entry is None:
-            return None
-        raw = None
+        if entries is None:
+            return None, None
+        by_module = {e["module_id"]: dict(e.get("settings") or {}) for e in entries}
+        moisture = light = None
         for module in await self.client.get_modules(scope):
-            if module.get("id") != entry["module_id"]:
-                continue
-            raw = next((ep.get("value") for ep in module.get("endpoints", []) if ep.get("type") == "moisture"), None)
-        return MoistureCalibration(entry["module_id"], dict(entry["settings"]), raw)
+            mid = module.get("id")
+            for ep in module.get("endpoints", []):
+                if ep.get("type") == "moisture" and DRY_RAW in by_module.get(mid, {}):
+                    moisture = MoistureCalibration(mid, by_module[mid], ep.get("value"))
+                elif ep.get("type") == "dimmer" and light is None:
+                    light = LightCalibration(mid, ep.get("index", 0), by_module.get(mid, {}), ep.get("value"))
+        return moisture, light
+
+    async def async_set_light_pwm(self, plant_id: str, pwm: float) -> None:
+        """Raw PWM, bypassing the lux curve — for measuring calibration points."""
+        plant = self.data.plants.get(plant_id)
+        cal = plant.light_cal if plant else None
+        if cal is None:
+            raise OflError(f"plant {plant_id} has no light module")
+        async with self.client.batch():
+            await self.client.put_endpoint(f"plants/{plant_id}", cal.module_id, cal.endpoint, int(round(pwm)))
+        await self.async_refresh()
+
+    async def async_set_light_curve(self, plant_id: str, curve: list[dict[str, float]]) -> None:
+        """Replace the light module's PWM->lux points, keeping its other Settings."""
+        plant = self.data.plants.get(plant_id)
+        cal = plant.light_cal if plant else None
+        if cal is None:
+            raise OflError(f"plant {plant_id} has no light module")
+        settings = {**cal.settings, LUX_CURVE: sorted(curve, key=lambda p: p["command"])}
+        async with self.client.batch():
+            resp = await self.client.put_settings(f"plants/{plant_id}", cal.module_id, settings)
+        cal.settings = dict(resp.get("settings") or settings)
+        await self.async_refresh()  # Actuators switch unit and range with the curve
 
     async def async_set_moisture_points(
         self, plant_id: str, dry: int | None = None, wet: int | None = None

@@ -93,6 +93,12 @@
       },
       "calibrate_wet": {
         "name": "Calibrate moisture: in water"
+      },
+      "light_cal_add": {
+        "name": "Add light calibration point"
+      },
+      "light_cal_reset": {
+        "name": "Reset light calibration"
       }
     },
     "number": {
@@ -113,6 +119,12 @@
       },
       "moisture_wet_raw": {
         "name": "Moisture wet point"
+      },
+      "measured_lux": {
+        "name": "Measured lux"
+      },
+      "light_pwm": {
+        "name": "Light PWM (calibration)"
       }
     },
     "sensor": {

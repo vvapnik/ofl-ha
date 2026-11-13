@@ -104,3 +104,4 @@ class MoistureRawSensor(OflEntity, SensorEntity):
     def native_value(self) -> int | None:
         cal = self.plant.moisture_cal if self.plant else None
         return cal.raw if cal else None
+

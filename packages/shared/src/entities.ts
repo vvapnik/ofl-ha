@@ -49,6 +49,7 @@ export interface SettingsEntry {
     mount_height_mm?: number;
     moisture_dry_raw?: number;
     moisture_wet_raw?: number;
+    dimmer_lux_curve?: { command: number; lux: number }[];
     [key: string]: unknown;
   };
 }
@@ -107,6 +108,8 @@ export interface ActuatorEntry {
   capability: string; // Capability Catalog key
   value: number | boolean;
   unit: string;
+  min?: number; // docs/17 §17.2: reachable range, in `unit`
+  max?: number;
 }
 export interface Actuators {
   actuators: ActuatorEntry[];

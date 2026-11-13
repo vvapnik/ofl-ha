@@ -270,6 +270,20 @@ every pot of every entry. Settings PUT replaces the whole module entry, so
 real rig through a throwaway pytest (HA test harness, bench mode) — not yet
 on the HA OS install, which pulls from GitHub `main`.
 
+### Light calibration in lux (2026-11-13, TASK-105)
+
+The light module takes 0–100 % PWM. Its Settings field `dimmer_lux_curve`
+(`open-farm-link/docs/07-settings.md` §7.3) holds lux-meter points; with
+>= 2 points the Head Device reports and accepts `dimmer` in lux with the
+curve's `min`/`max` (docs/17 §17.2), otherwise honest `percent` 0–100.
+`ActuatorNumber` takes unit/min/max from the actuator entry on every poll,
+so the slider switches range by itself. Calibration entities per Plant:
+"Light PWM (calibration)" (raw PWM via the Modules endpoint, bypassing the
+curve — the lux slider can't set PWM once two points exist), "Measured lux"
+(HA-only, restored), "Add light calibration point" (current PWM + measured
+lux, replaces a point at the same PWM), "Reset light calibration". The
+device rejects a point if lux doesn't rise strictly with PWM.
+
 ## Known gaps / open points
 
 - **Water now times the close in HA.** The Actuators API has no duration

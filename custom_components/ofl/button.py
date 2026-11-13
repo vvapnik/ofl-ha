@@ -18,7 +18,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
 from .api import OflError
-from .const import CONF_WATER_SECONDS, DEFAULT_WATER_SECONDS
+from .const import CONF_WATER_SECONDS, DEFAULT_WATER_SECONDS, DOMAIN
 from .coordinator import OflConfigEntry, OflCoordinator
 from .entity import OflEntity, track_entities
 
@@ -36,6 +36,9 @@ async def async_setup_entry(
             if plant.moisture_cal is not None:
                 for point in ("dry", "wet"):
                     factories[f"{pid}/calibrate_{point}"] = lambda p=pid, k=point: CalibrateMoistureButton(c, p, k)
+            if plant.light_cal is not None:
+                factories[f"{pid}/light_cal_add"] = lambda p=pid: AddLightPointButton(c, p)
+                factories[f"{pid}/light_cal_reset"] = lambda p=pid: ResetLightCalibrationButton(c, p)
         return factories
 
     track_entities(entry, async_add_entities, build)
@@ -113,3 +116,62 @@ class CalibrateMoistureButton(OflEntity, ButtonEntity):
             )
         except OflError as err:
             raise HomeAssistantError(f"Head Device rejected the calibration: {err}") from err
+
+
+class AddLightPointButton(OflEntity, ButtonEntity):
+    """Pair the light's current PWM with the lux typed into "Measured lux"
+    and add it to the curve (replacing a point at the same PWM)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_translation_key = "light_cal_add"
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str) -> None:
+        super().__init__(coordinator, plant_id, "button", "light_cal_add")
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.plant.light_cal is not None
+
+    async def async_press(self) -> None:
+        from homeassistant.helpers import entity_registry as er
+
+        from .entity import unique_id_for
+
+        uid = unique_id_for(self._garden_id, self.scope, "number", "measured_lux")
+        entity_id = er.async_get(self.hass).async_get_entity_id("number", DOMAIN, uid)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            lux = float(state.state)
+        except (AttributeError, TypeError, ValueError):
+            raise HomeAssistantError("Enter the lux meter reading in \"Measured lux\" first") from None
+        await self.coordinator.async_refresh()
+        cal = self.plant.light_cal if self.plant else None
+        if cal is None or cal.pwm is None:
+            raise HomeAssistantError("No PWM reading from the light module right now")
+        curve = [p for p in cal.curve if p["command"] != cal.pwm] + [{"command": cal.pwm, "lux": lux}]
+        try:
+            await self.coordinator.async_set_light_curve(self.scope, curve)
+        except OflError as err:
+            raise HomeAssistantError(
+                f"Head Device rejected the point (lux must rise with PWM, up to 8 points): {err}"
+            ) from err
+
+
+class ResetLightCalibrationButton(OflEntity, ButtonEntity):
+    """Clear the PWM->lux curve: the light slider goes back to raw 0-100 % PWM."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_translation_key = "light_cal_reset"
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str) -> None:
+        super().__init__(coordinator, plant_id, "button", "light_cal_reset")
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.plant.light_cal is not None
+
+    async def async_press(self) -> None:
+        try:
+            await self.coordinator.async_set_light_curve(self.scope, [])
+        except OflError as err:
+            raise HomeAssistantError(f"Head Device rejected the change: {err}") from err

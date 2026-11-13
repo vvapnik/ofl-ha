@@ -333,6 +333,10 @@ class OflClient:
     async def get_hardware_calibration(self, scope: str) -> list[dict[str, Any]]:
         return (await self.request("GET", f"/garden/{scope}/hardware-calibration"))["calibrations"]
 
+    async def put_endpoint(self, scope: str, module_id: str, index: int, value: Any) -> dict[str, Any]:
+        """Raw module write (docs/09 §9.3) — no calibration, no validation."""
+        return await self.request("PUT", f"/garden/{scope}/modules/{module_id}/endpoints/{index}", json={"value": value})
+
     async def get_settings(self, scope: str) -> list[dict[str, Any]]:
         return (await self.request("GET", f"/garden/{scope}/settings"))["settings"]
 
