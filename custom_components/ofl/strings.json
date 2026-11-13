@@ -125,6 +125,18 @@
       },
       "light_pwm": {
         "name": "Light PWM (calibration)"
+      },
+      "target_light_lux": {
+        "name": "Target brightness"
+      },
+      "target_light_hours_per_day": {
+        "name": "Light hours per day"
+      },
+      "target_moisture_min": {
+        "name": "Target moisture min"
+      },
+      "target_moisture_max": {
+        "name": "Target moisture max"
       }
     },
     "sensor": {

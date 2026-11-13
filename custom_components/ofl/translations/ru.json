@@ -125,6 +125,18 @@
       },
       "light_pwm": {
         "name": "ШИМ света (калибровка)"
+      },
+      "target_light_lux": {
+        "name": "Целевая яркость"
+      },
+      "target_light_hours_per_day": {
+        "name": "Часов света в сутки"
+      },
+      "target_moisture_min": {
+        "name": "Целевая влажность: минимум"
+      },
+      "target_moisture_max": {
+        "name": "Целевая влажность: максимум"
       }
     },
     "sensor": {

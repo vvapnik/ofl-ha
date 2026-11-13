@@ -174,6 +174,7 @@ export interface Preferences {
   quiet_hours?: { from: string; to: string } | null;
   max_brightness?: number | null;
   vacation_mode?: boolean;
+  timezone?: string | null; // docs/13 §13.2: POSIX TZ rule
   [key: string]: unknown;
 }
 

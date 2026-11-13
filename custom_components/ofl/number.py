@@ -32,6 +32,9 @@ async def async_setup_entry(
             if plant.moisture_cal is not None:
                 for point in ("dry", "wet"):
                     factories[f"{pid}/moisture_{point}_raw"] = lambda p=pid, k=point: MoisturePointNumber(c, p, k)
+            if plant.grow_profile:  # firmware with Grow Profile
+                for target in GROW_TARGETS:
+                    factories[f"{pid}/target_{target}"] = lambda p=pid, t=target: GrowTargetNumber(c, p, t)
             if plant.light_cal is not None:
                 factories[f"{pid}/measured_lux"] = lambda p=pid: MeasuredLuxNumber(c, p)
                 factories[f"{pid}/light_pwm"] = lambda p=pid: LightPwmNumber(c, p)
@@ -91,8 +94,10 @@ class ActuatorNumber(OflEntity, NumberEntity):
             # Merge: a device may answer with just {capability, value}.
             self.scope_data.actuators[self.key] = {**self.scope_data.actuators[self.key], **resp}
         self.coordinator.async_update_listeners()
-        if self.plant is not None and self.plant.light_cal is not None and self.key == "dimmer":
-            await self.coordinator.async_request_refresh()  # raw PWM changed too
+        if self.plant is not None and self.key == "dimmer":
+            # The device turns automatic lighting off on a manual change, and
+            # the raw PWM moved too — show both without waiting for the poll.
+            await self.coordinator.async_request_refresh()
 
 
 class MoisturePointNumber(OflEntity, NumberEntity):
@@ -194,3 +199,70 @@ class LightPwmNumber(OflEntity, NumberEntity):
             await self.coordinator.async_set_light_pwm(self.scope, value)
         except OflError as err:
             raise HomeAssistantError(f"Head Device rejected the change: {err}") from err
+
+
+# Grow Profile targets (docs/08 §8.2) edited directly: key -> (path in
+# targets, unit, min, max, step). moisture_percent is a {min, max} range.
+GROW_TARGETS: dict[str, tuple[tuple[str, ...], str | None, float, float, float]] = {
+    "light_lux": (("light_lux",), LIGHT_LUX, 0, 100000, 10),
+    "light_hours_per_day": (("light_hours_per_day",), "h", 0, 24, 0.5),
+    "moisture_min": (("moisture_percent", "min"), "%", 0, 100, 1),
+    "moisture_max": (("moisture_percent", "max"), "%", 0, 100, 1),
+}
+
+
+class GrowTargetNumber(OflEntity, NumberEntity):
+    """One Grow Profile target. PUT replaces the whole profile, so the rest is sent back as is."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator: OflCoordinator, plant_id: str, target: str) -> None:
+        super().__init__(coordinator, plant_id, "number", f"target_{target}")
+        self._path, unit, lo, hi, step = GROW_TARGETS[target]
+        self._attr_translation_key = f"target_{target}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_native_min_value = lo
+        self._attr_native_max_value = hi
+        self._attr_native_step = step
+        self._target = target
+
+    @property
+    def native_max_value(self) -> float:
+        # Target brightness can't exceed what the calibrated light reaches.
+        if self._target == "light_lux" and self.plant is not None:
+            dimmer = self.plant.actuators.get("dimmer") or {}
+            if dimmer.get("unit") == "lux" and "max" in dimmer:
+                return float(dimmer["max"])
+        return self._attr_native_max_value
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self.plant.grow_profile)
+
+    @property
+    def native_value(self) -> float | None:
+        node = (self.plant.grow_profile if self.plant else {}).get("targets") or {}
+        for key in self._path:
+            node = node.get(key) if isinstance(node, dict) else None
+        return None if node is None else float(node)
+
+    async def async_set_native_value(self, value: float) -> None:
+        profile = {k: v for k, v in self.plant.grow_profile.items() if k != "status"}
+        targets = dict(profile.get("targets") or {})
+        number = int(value) if float(value).is_integer() else value
+        if self._path[0] == "moisture_percent":
+            rng = dict(targets.get("moisture_percent") or {"min": number, "max": number})
+            rng[self._path[1]] = number
+            # Keep min <= max: moving one past the other drags it along.
+            if rng["min"] > rng["max"]:
+                rng["max" if self._path[1] == "min" else "min"] = number
+            targets["moisture_percent"] = rng
+        else:
+            targets[self._path[0]] = number
+        profile["targets"] = targets
+        profile.setdefault("species", "")
+        profile.setdefault("required_capabilities", [])
+        resp = await self._write(lambda: self.coordinator.client.put_grow_profile(self.scope, profile))
+        self.plant.grow_profile = resp if isinstance(resp, dict) and "targets" in resp else profile
+        self.coordinator.async_update_listeners()

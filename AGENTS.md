@@ -284,6 +284,18 @@ curve — the lux slider can't set PWM once two points exist), "Measured lux"
 lux, replaces a point at the same PWM), "Reset light calibration". The
 device rejects a point if lux doesn't rise strictly with PWM.
 
+### Grow targets, time zone, auto-lighting (2026-11-13, TASK-98.2)
+
+CONFIG numbers per Plant edit Grow Profile targets directly (PUT replaces
+the profile, so the rest is sent back): target brightness (lx, max = the
+calibrated light's max), light hours per day, moisture min/max (moving one
+past the other drags it along). The coordinator pushes HA's time zone as a
+POSIX TZ rule (`posix_tz()`, TZif footer) to `Preferences.timezone` when
+the firmware has that field, under the same option as the clock sync. The
+"Automatic lighting/watering" switches are the profile's `*_enabled`
+flags; the device turns lighting off on a manual dimmer change, and the
+slider refreshes right after a write so the switch follows.
+
 ## Known gaps / open points
 
 - **Water now times the close in HA.** The Actuators API has no duration

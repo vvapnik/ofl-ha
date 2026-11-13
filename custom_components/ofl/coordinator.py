@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import logging
+import os
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -128,6 +129,29 @@ def raw_unit(data: ScopeData, key: str, declared: str | None) -> tuple[str | Non
     return RAW_FORMATS.get(fmt, (None, None))
 
 
+def posix_tz(name: str) -> str | None:
+    """IANA zone name -> its POSIX TZ rule: the footer line of the TZif file."""
+    import zoneinfo
+
+    paths = [os.path.join(base, name) for base in zoneinfo.TZPATH]
+    try:
+        import tzdata  # bundled with HA when the OS has no zoneinfo
+
+        paths.append(os.path.join(os.path.dirname(tzdata.__file__), "zoneinfo", *name.split("/")))
+    except ImportError:
+        pass
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        footer = data.rstrip(b"\n").rsplit(b"\n", 1)[-1]
+        if data.startswith(b"TZif") and footer and not footer.startswith(b"TZif"):
+            return footer.decode("ascii")
+    return None
+
+
 type OflConfigEntry = ConfigEntry[OflCoordinator]
 
 
@@ -177,6 +201,8 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
         c = self.client
         garden = await c.get_garden()
         preferences = await self._optional("preferences", c.get_preferences)
+        if preferences is not None:
+            preferences = await self._maybe_sync_timezone(preferences)
         time = await self._maybe_sync_time(await c.get_time())
 
         system = ScopeData()
@@ -286,6 +312,18 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             if physical:
                 maxima[entry["endpoint_type"]] = max(physical)
         return maxima
+
+    async def _maybe_sync_timezone(self, preferences: dict[str, Any]) -> dict[str, Any]:
+        """Push HA's time zone as a POSIX TZ rule, so quiet hours and the light
+        window run in local time on the device. Only for firmware that has the
+        ``timezone`` preference; follows the same option as the clock sync."""
+        if "timezone" not in preferences or not self.config_entry.options.get(CONF_SYNC_TIME, DEFAULT_SYNC_TIME):
+            return preferences
+        posix = await self.hass.async_add_executor_job(posix_tz, self.hass.config.time_zone)
+        if not posix or preferences.get("timezone") == posix:
+            return preferences
+        _LOGGER.info("Setting Head Device %s time zone to %s (%s)", self.config_entry.title, posix, self.hass.config.time_zone)
+        return await self.client.put_preferences({"timezone": posix})
 
     async def _maybe_sync_time(self, time: dict[str, Any]) -> dict[str, Any]:
         """§16.6: a Control Panel MAY push its clock when the device has none."""
