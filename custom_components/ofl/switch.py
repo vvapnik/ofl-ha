@@ -68,7 +68,6 @@ class ActuatorSwitch(OflEntity, SwitchEntity):
 class GrowFlagSwitch(OflEntity, SwitchEntity):
     """One generic-Scenario category on/off (docs/08-grow-profile.md §8.3)."""
 
-    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: OflCoordinator, plant_id: str, flag: str) -> None:
         super().__init__(coordinator, plant_id, "grow_flag", flag)

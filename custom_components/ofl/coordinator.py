@@ -8,8 +8,8 @@ one-slot connector anyway.
 Optional parts of the API (Preferences, Grow Profile, Hardware Calibration)
 may be missing on simpler firmware: a 404 there means "not supported", the
 matching entities are simply not created. In bench mode (no docs/22
-security — such firmware is the only kind we know) that is remembered, so
-the device isn't asked again on every poll.
+security — such firmware is the only kind we know) that is remembered for a
+minute, so the device isn't asked on every poll.
 
 Without Hardware Calibration a device reports raw endpoint values (§6) under
 the catalog's physical unit — e.g. a raw16 moisture reading as "percent".
@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import logging
 import os
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -152,6 +153,8 @@ def posix_tz(name: str) -> str | None:
     return None
 
 
+UNSUPPORTED_RETRY_S = 60
+
 type OflConfigEntry = ConfigEntry[OflCoordinator]
 
 
@@ -167,12 +170,16 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
         # Hardware Calibration is library data that only changes with the
         # hardware itself, so it's fetched once per scope, not every poll.
         self._calibration_max: dict[str, dict[str, float] | None] = {}  # None: no calibration
-        # Optional endpoints found missing (bench mode only, see module doc).
-        self._unsupported: set[str] = set()
+        # Optional endpoints found missing (bench mode only, see module doc):
+        # feature -> monotonic time it may be asked again. Not forever: a
+        # Plant-scoped path also answers 404 while the Plant is briefly gone
+        # (module re-enumeration, reboot), and that must not hide Settings —
+        # i.e. both calibrations — until HA restarts.
+        self._unsupported: dict[str, float] = {}
 
     async def _optional[T](self, feature: str, call: Callable[[], Awaitable[T]]) -> T | None:
         """Call an optional endpoint; ``None`` if the device doesn't have it (404)."""
-        if feature in self._unsupported:
+        if self._unsupported.get(feature, 0) > time.monotonic():
             return None
         try:
             return await call()
@@ -180,8 +187,11 @@ class OflCoordinator(DataUpdateCoordinator[GardenData]):
             if err.status != 404:
                 raise
             if self.client.insecure:
-                _LOGGER.info("%s: device has no %s; not asking again", self.config_entry.title, feature)
-                self._unsupported.add(feature)
+                _LOGGER.info(
+                    "%s: no %s on the device; asking again in %d s",
+                    self.config_entry.title, feature, UNSUPPORTED_RETRY_S,
+                )
+                self._unsupported[feature] = time.monotonic() + UNSUPPORTED_RETRY_S
             return None
 
     async def _async_update_data(self) -> GardenData:

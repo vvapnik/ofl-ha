@@ -93,7 +93,7 @@ class CalibrateMoistureButton(OflEntity, ButtonEntity):
     """Store the pot's current raw moisture reading as its dry (in air) or wet
     (in water) point — the Head Device maps raw to % between them."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: OflCoordinator, plant_id: str, point: str) -> None:
         super().__init__(coordinator, plant_id, "button", f"calibrate_{point}")
@@ -122,7 +122,7 @@ class AddLightPointButton(OflEntity, ButtonEntity):
     """Pair the light's current PWM with the lux typed into "Measured lux"
     and add it to the curve (replacing a point at the same PWM)."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "light_cal_add"
 
     def __init__(self, coordinator: OflCoordinator, plant_id: str) -> None:
@@ -160,7 +160,7 @@ class AddLightPointButton(OflEntity, ButtonEntity):
 class ResetLightCalibrationButton(OflEntity, ButtonEntity):
     """Clear the PWM->lux curve: the light slider goes back to raw 0-100 % PWM."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = "light_cal_reset"
 
     def __init__(self, coordinator: OflCoordinator, plant_id: str) -> None:

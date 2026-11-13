@@ -296,6 +296,16 @@ the firmware has that field, under the same option as the clock sync. The
 flags; the device turns lighting off on a manual dimmer change, and the
 slider refreshes right after a write so the switch follows.
 
+### Plant device page layout (2026-11-13)
+
+HA's device page has fixed sections, so an entity's `entity_category`
+decides where it lands: Controls — light, valve, Water now, Automatic
+lighting/watering/climate; Sensors — vitals, Problem; Configuration —
+Grow Profile targets; Diagnostic (collapsed) — every calibration entity
+(moisture points/buttons/raw, light PWM/measured lux/add/reset).
+Bench-mode 404 on an optional endpoint is retried after 60 s, not cached
+until restart (it hid Settings, i.e. all calibration, after a reboot).
+
 ## Known gaps / open points
 
 - **Water now times the close in HA.** The Actuators API has no duration

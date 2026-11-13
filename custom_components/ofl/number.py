@@ -103,7 +103,7 @@ class ActuatorNumber(OflEntity, NumberEntity):
 class MoisturePointNumber(OflEntity, NumberEntity):
     """A pot's dry/wet point in raw sensor units (OGR Raw16), for manual edits."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_mode = NumberMode.BOX
     _attr_native_min_value = 0
     _attr_native_max_value = 65535
@@ -135,7 +135,7 @@ class MeasuredLuxNumber(OflEntity, RestoreNumber):
     """Lux meter reading typed in by the user; "Add light calibration point"
     pairs it with the light's current PWM. Kept in HA only (restored on restart)."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_mode = NumberMode.BOX
     _attr_native_min_value = 0
     _attr_native_max_value = 200000
@@ -169,7 +169,7 @@ class LightPwmNumber(OflEntity, NumberEntity):
     """Raw light PWM (0-100 %) written straight to the module, bypassing the lux
     curve — set it, measure, then "Add light calibration point"."""
 
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_mode = NumberMode.BOX
     _attr_native_min_value = 0
     _attr_native_max_value = 100
